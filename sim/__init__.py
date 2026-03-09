@@ -15,6 +15,23 @@ from .experiment1_analysis import (
     make_pairwise_comparison_table,
 )
 from .experiment1_models import build_model, default_methods_for_task
+from .experiment1_step1_data import (
+    BinaryClassificationDataset,
+    BinaryClassificationSplit,
+    load_adult_income,
+    simulate_grouped_classification,
+    summarize_binary_classification_dataset,
+    with_margin_based_difficulty_groups,
+)
+from .experiment1_step1_eval import (
+    compute_binary_classification_metrics,
+    compute_groupwise_binary_metrics,
+    compute_risk_redistribution_metrics,
+    evaluate_binary_predictions,
+    hard_group_gain_vs_easy_group_sacrifice,
+    make_binary_prediction_frame,
+    save_prediction_frame,
+)
 
 __all__ = [
     "build_analysis_summary",
@@ -30,4 +47,17 @@ __all__ = [
     "make_oracle_metadata",
     "subgroup_metrics",
     "summarize_dataset_bundle",
+    "BinaryClassificationDataset",
+    "BinaryClassificationSplit",
+    "compute_binary_classification_metrics",
+    "compute_groupwise_binary_metrics",
+    "compute_risk_redistribution_metrics",
+    "evaluate_binary_predictions",
+    "hard_group_gain_vs_easy_group_sacrifice",
+    "load_adult_income",
+    "make_binary_prediction_frame",
+    "save_prediction_frame",
+    "simulate_grouped_classification",
+    "summarize_binary_classification_dataset",
+    "with_margin_based_difficulty_groups",
 ]

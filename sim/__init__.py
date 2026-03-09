@@ -60,6 +60,15 @@ from .experiment4_data import (
     top_correlated_features,
 )
 
+from .experiment4_eval import (
+    aggregate_metric_table,
+    make_feature_support_frame,
+    regression_metrics as experiment4_regression_metrics,
+    stability_selection_metrics,
+    support_indicator,
+    support_recovery_metrics,
+)
+
 from .experiment4_models import (
     BaggedComponentwiseConfig,
     BaggedComponentwiseRegressorWrapper,
@@ -117,16 +126,22 @@ __all__ = [
     "XGBTreeRegressorWrapper",
     "build_experiment4_model",
     "default_experiment4_model_grid",
+    "aggregate_metric_table",
+    "make_feature_support_frame",
+    "experiment4_regression_metrics",
+    "stability_selection_metrics",
+    "support_indicator",
+    "support_recovery_metrics",
     "simulate_grouped_classification",
     "summarize_binary_classification_dataset",
     "with_margin_based_difficulty_groups",
     "FocusPair",
-    "aggregate_trajectories",
+   "aggregate_trajectories",
     "bootstrap_pairwise_metric_differences",
     "infer_focus_pairs",
     "load_step2_artifacts",
     "make_analysis_summary",
     "pairwise_loss_deltas",
-    "summarize_group_metrics",
-    "summarize_model_metrics",
+   "summarize_group_metrics",
+   "summarize_model_metrics",
 ]

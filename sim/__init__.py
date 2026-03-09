@@ -32,6 +32,12 @@ from .experiment1_step1_eval import (
     make_binary_prediction_frame,
     save_prediction_frame,
 )
+from .experiment1_step2_models import (
+    BinaryEnsembleWrapper,
+    EnsembleModelConfig,
+    build_binary_ensemble_wrapper,
+    expand_model_grid,
+)
 
 __all__ = [
     "build_analysis_summary",
@@ -57,6 +63,10 @@ __all__ = [
     "load_adult_income",
     "make_binary_prediction_frame",
     "save_prediction_frame",
+    "BinaryEnsembleWrapper",
+    "EnsembleModelConfig",
+    "build_binary_ensemble_wrapper",
+    "expand_model_grid",
     "simulate_grouped_classification",
     "summarize_binary_classification_dataset",
     "with_margin_based_difficulty_groups",

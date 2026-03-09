@@ -136,7 +136,8 @@ def make_method_comparison_plot(
 
     metric_ax.boxplot(metric_values, labels=methods, vert=True)
     metric_ax.set_title(f"Primary metric: {primary_metric}")
-    metric_ax.set_ylabel(primary_metric)+    metric_ax.tick_params(axis="x", rotation=35)
+    metric_ax.set_ylabel(primary_metric)
+    metric_ax.tick_params(axis="x", rotation=35)
 
     var_ax.boxplot(var_values, labels=methods, vert=True)
     var_ax.set_title("Prediction variance")

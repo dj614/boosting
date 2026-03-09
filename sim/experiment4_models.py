@@ -1,0 +1,687 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import lasso_path
+from sklearn.metrics import mean_squared_error
+
+from .experiment4_data import SparseRegressionSplit
+
+try:  # pragma: no cover
+    from xgboost import XGBRegressor
+except Exception:  # pragma: no cover
+    XGBRegressor = None
+
+
+Array = np.ndarray
+
+
+@dataclass(frozen=True)
+class L2BoostingConfig:
+    max_steps: int = 300
+    learning_rate: float = 0.1
+    coef_tol: float = 1e-10
+    random_state: int = 0
+
+    @property
+    def model_name(self) -> str:
+        return "l2boost"
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class BaggedComponentwiseConfig:
+    n_estimators: int = 100
+    base_max_steps: int = 100
+    learning_rate: float = 0.1
+    bootstrap_fraction: float = 1.0
+    support_frequency_threshold: float = 0.5
+    coef_tol: float = 1e-10
+    random_state: int = 0
+
+    @property
+    def model_name(self) -> str:
+        return "bagged_componentwise"
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class LassoPathConfig:
+    alphas: Optional[Tuple[float, ...]] = None
+    n_alphas: int = 80
+    eps: float = 1e-3
+    coef_tol: float = 1e-10
+    random_state: int = 0
+
+    @property
+    def model_name(self) -> str:
+        return "lasso"
+
+    def to_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        if self.alphas is not None:
+            payload["alphas"] = [float(a) for a in self.alphas]
+        return payload
+
+
+@dataclass(frozen=True)
+class XGBTreeConfig:
+    n_estimators: int = 300
+    max_depth: int = 4
+    learning_rate: float = 0.05
+    subsample: float = 0.9
+    colsample_bytree: float = 0.9
+    reg_lambda: float = 1.0
+    random_state: int = 0
+
+    @property
+    def model_name(self) -> str:
+        return "xgb_tree"
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class StandardizationStats:
+    x_mean: Array
+    x_std: Array
+    y_mean: float
+
+
+@dataclass(frozen=True)
+class L2BoostPathResult:
+    coef_path: Array
+    selected_feature_path: Array
+    train_prediction_path: Array
+
+
+class SparseRegressionWrapperBase:
+    def __init__(self) -> None:
+        self.standardization_: Optional[StandardizationStats] = None
+        self.selected_support_: Optional[Array] = None
+        self.selection_trace_: Optional[pd.DataFrame] = None
+
+    @property
+    def model_name(self) -> str:
+        raise NotImplementedError
+
+    def fit(
+        self,
+        train_split: SparseRegressionSplit,
+        valid_split: SparseRegressionSplit,
+    ) -> "SparseRegressionWrapperBase":
+        raise NotImplementedError
+
+    def predict(self, X: Array):
+        raise NotImplementedError
+
+
+class L2BoostingRegressorWrapper(SparseRegressionWrapperBase):
+    def __init__(
+        self,
+        config: L2BoostingConfig,
+        selection_checkpoints: Optional[Sequence[int]] = None,
+        trajectory_checkpoints: Optional[Sequence[int]] = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.selection_checkpoints = _resolve_checkpoints(
+            selection_checkpoints,
+            max_checkpoint=config.max_steps,
+            default_points=min(25, config.max_steps),
+        )
+        self.trajectory_checkpoints = _resolve_checkpoints(
+            trajectory_checkpoints,
+            max_checkpoint=config.max_steps,
+            default_points=min(25, config.max_steps),
+        )
+        self.selected_step_: Optional[int] = None
+        self.coef_path_: Optional[Array] = None
+        self.selected_feature_path_: Optional[Array] = None
+        self.entry_step_: Optional[Array] = None
+        self.selected_coef_: Optional[Array] = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def fit(
+        self,
+        train_split: SparseRegressionSplit,
+        valid_split: SparseRegressionSplit,
+    ) -> "L2BoostingRegressorWrapper":
+        X_train_std, y_train_centered, stats = _prepare_train_arrays(train_split.X, train_split.y)
+        X_valid_std = _transform_features(valid_split.X, stats)
+        self.standardization_ = stats
+
+        path = _fit_l2boost_path(
+            X=X_train_std,
+            y_centered=y_train_centered,
+            max_steps=self.config.max_steps,
+            learning_rate=self.config.learning_rate,
+        )
+        self.coef_path_ = path.coef_path
+        self.selected_feature_path_ = path.selected_feature_path
+        self.entry_step_ = _compute_entry_step(path.selected_feature_path, X_train_std.shape[1])
+
+        valid_pred_path = _predict_centered_from_coef_path(X_valid_std, self.coef_path_)
+        rows: List[Dict[str, float]] = []
+        best_step = None
+        best_valid_mse = None
+        for step in self.selection_checkpoints:
+            pred = valid_pred_path[step - 1] + stats.y_mean
+            mse = float(mean_squared_error(valid_split.y, pred))
+            coef = self.coef_path_[step - 1]
+            support_size = int(np.count_nonzero(np.abs(coef) > self.config.coef_tol))
+            rows.append(
+                {
+                    "checkpoint": int(step),
+                    "valid_mse": mse,
+                    "support_size": float(support_size),
+                    "last_selected_feature": float(self.selected_feature_path_[step - 1]),
+                }
+            )
+            if best_valid_mse is None or mse < best_valid_mse:
+                best_valid_mse = mse
+                best_step = int(step)
+
+        self.selection_trace_ = pd.DataFrame(rows)
+        self.selected_step_ = int(best_step)
+        self.selected_coef_ = self.coef_path_[self.selected_step_ - 1].copy()
+        self.selected_support_ = np.flatnonzero(np.abs(self.selected_coef_) > self.config.coef_tol).astype(int)
+        return self
+
+    def coef_at_step(self, step: Optional[int] = None) -> Array:
+        if self.coef_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_step = int(step or self.selected_step_ or self.config.max_steps)
+        _validate_step(use_step, self.config.max_steps)
+        return self.coef_path_[use_step - 1].copy()
+
+    def predict(self, X: Array, step: Optional[int] = None) -> Array:
+        stats = _require_standardization(self.standardization_)
+        coef = self.coef_at_step(step=step)
+        X_std = _transform_features(X, stats)
+        return X_std @ coef + stats.y_mean
+
+    def predict_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        if self.coef_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        stats = _require_standardization(self.standardization_)
+        X_std = _transform_features(X, stats)
+        out: Dict[int, Array] = {}
+        for step in sorted({int(s) for s in checkpoints}):
+            _validate_step(step, self.config.max_steps)
+            out[int(step)] = X_std @ self.coef_path_[step - 1] + stats.y_mean
+        return out
+
+    def support_at_step(self, step: Optional[int] = None) -> Array:
+        coef = self.coef_at_step(step=step)
+        return np.flatnonzero(np.abs(coef) > self.config.coef_tol).astype(int)
+
+
+class BaggedComponentwiseRegressorWrapper(SparseRegressionWrapperBase):
+    def __init__(
+        self,
+        config: BaggedComponentwiseConfig,
+        selection_checkpoints: Optional[Sequence[int]] = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.selection_checkpoints = _resolve_checkpoints(
+            selection_checkpoints,
+            max_checkpoint=config.n_estimators,
+            default_points=min(20, config.n_estimators),
+        )
+        self.selected_checkpoint_: Optional[int] = None
+        self.bag_coef_matrix_: Optional[Array] = None
+        self.bag_selected_feature_path_: Optional[Array] = None
+        self.selected_coef_: Optional[Array] = None
+        self.selection_frequency_: Optional[Array] = None
+        self.average_abs_coef_: Optional[Array] = None
+        self.mean_support_size_by_checkpoint_: Optional[Dict[int, float]] = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def fit(
+        self,
+        train_split: SparseRegressionSplit,
+        valid_split: SparseRegressionSplit,
+    ) -> "BaggedComponentwiseRegressorWrapper":
+        rng = np.random.default_rng(self.config.random_state)
+        X_train_std, y_train_centered, stats = _prepare_train_arrays(train_split.X, train_split.y)
+        X_valid_std = _transform_features(valid_split.X, stats)
+        self.standardization_ = stats
+
+        n_train, p = X_train_std.shape
+        bag_size = max(1, int(round(self.config.bootstrap_fraction * n_train)))
+        coef_matrix = np.zeros((self.config.n_estimators, p), dtype=float)
+        selected_path_matrix = np.zeros((self.config.n_estimators, self.config.base_max_steps), dtype=int)
+        valid_preds = np.zeros((self.config.n_estimators, X_valid_std.shape[0]), dtype=float)
+        support_sizes = np.zeros(self.config.n_estimators, dtype=float)
+
+        for bag_idx in range(self.config.n_estimators):
+            sample_idx = rng.choice(n_train, size=bag_size, replace=True)
+            path = _fit_l2boost_path(
+                X=X_train_std[sample_idx],
+                y_centered=y_train_centered[sample_idx],
+                max_steps=self.config.base_max_steps,
+                learning_rate=self.config.learning_rate,
+            )
+            coef = path.coef_path[-1]
+            coef_matrix[bag_idx] = coef
+            selected_path_matrix[bag_idx] = path.selected_feature_path
+            valid_preds[bag_idx] = X_valid_std @ coef + stats.y_mean
+            support_sizes[bag_idx] = float(np.count_nonzero(np.abs(coef) > self.config.coef_tol))
+
+        self.bag_coef_matrix_ = coef_matrix
+        self.bag_selected_feature_path_ = selected_path_matrix
+
+        rows: List[Dict[str, float]] = []
+        best_checkpoint = None
+        best_valid_mse = None
+        mean_support_size_by_checkpoint: Dict[int, float] = {}
+        for checkpoint in self.selection_checkpoints:
+            avg_pred = valid_preds[:checkpoint].mean(axis=0)
+            mse = float(mean_squared_error(valid_split.y, avg_pred))
+            avg_coef = coef_matrix[:checkpoint].mean(axis=0)
+            selection_freq = np.mean(np.abs(coef_matrix[:checkpoint]) > self.config.coef_tol, axis=0)
+            threshold_support = int(np.count_nonzero(selection_freq >= self.config.support_frequency_threshold))
+            mean_support = float(np.mean(support_sizes[:checkpoint]))
+            mean_support_size_by_checkpoint[int(checkpoint)] = mean_support
+            rows.append(
+                {
+                    "checkpoint": int(checkpoint),
+                    "valid_mse": mse,
+                    "support_size_frequency_threshold": float(threshold_support),
+                    "mean_single_model_support_size": mean_support,
+                    "union_support_size": float(np.count_nonzero(np.any(np.abs(coef_matrix[:checkpoint]) > self.config.coef_tol, axis=0))),
+                }
+            )
+            if best_valid_mse is None or mse < best_valid_mse:
+                best_valid_mse = mse
+                best_checkpoint = int(checkpoint)
+
+        self.selection_trace_ = pd.DataFrame(rows)
+        self.selected_checkpoint_ = int(best_checkpoint)
+        self.selected_coef_ = coef_matrix[: self.selected_checkpoint_].mean(axis=0)
+        self.selection_frequency_ = np.mean(
+            np.abs(coef_matrix[: self.selected_checkpoint_]) > self.config.coef_tol,
+            axis=0,
+        )
+        self.average_abs_coef_ = np.mean(np.abs(coef_matrix[: self.selected_checkpoint_]), axis=0)
+        self.selected_support_ = np.flatnonzero(
+            self.selection_frequency_ >= self.config.support_frequency_threshold
+        ).astype(int)
+        self.mean_support_size_by_checkpoint_ = mean_support_size_by_checkpoint
+        return self
+
+    def predict(self, X: Array, checkpoint: Optional[int] = None) -> Array:
+        out = self.predict_staged(X, checkpoints=[int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)])
+        key = int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)
+        return out[key]
+
+    def predict_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        if self.bag_coef_matrix_ is None:
+            raise RuntimeError("Model has not been fit")
+        stats = _require_standardization(self.standardization_)
+        X_std = _transform_features(X, stats)
+        requested = sorted({int(c) for c in checkpoints})
+        out: Dict[int, Array] = {}
+        for checkpoint in requested:
+            _validate_step(checkpoint, self.config.n_estimators)
+            coef = self.bag_coef_matrix_[:checkpoint].mean(axis=0)
+            out[int(checkpoint)] = X_std @ coef + stats.y_mean
+        return out
+
+    def selection_frequency_at_checkpoint(self, checkpoint: Optional[int] = None) -> Array:
+        if self.bag_coef_matrix_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_checkpoint = int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)
+        _validate_step(use_checkpoint, self.config.n_estimators)
+        return np.mean(np.abs(self.bag_coef_matrix_[:use_checkpoint]) > self.config.coef_tol, axis=0)
+
+    def support_at_checkpoint(self, checkpoint: Optional[int] = None, threshold: Optional[float] = None) -> Array:
+        freq = self.selection_frequency_at_checkpoint(checkpoint=checkpoint)
+        tau = float(self.config.support_frequency_threshold if threshold is None else threshold)
+        return np.flatnonzero(freq >= tau).astype(int)
+
+
+class LassoPathRegressorWrapper(SparseRegressionWrapperBase):
+    def __init__(self, config: LassoPathConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.alpha_path_: Optional[Array] = None
+        self.coef_path_: Optional[Array] = None
+        self.selected_alpha_: Optional[float] = None
+        self.selected_coef_: Optional[Array] = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def fit(
+        self,
+        train_split: SparseRegressionSplit,
+        valid_split: SparseRegressionSplit,
+    ) -> "LassoPathRegressorWrapper":
+        X_train_std, y_train_centered, stats = _prepare_train_arrays(train_split.X, train_split.y)
+        X_valid_std = _transform_features(valid_split.X, stats)
+        self.standardization_ = stats
+
+        alphas = None if self.config.alphas is None else np.asarray(self.config.alphas, dtype=float)
+        alpha_path, coef_path, _ = lasso_path(
+            X=X_train_std,
+            y=y_train_centered,
+            alphas=alphas,
+            n_alphas=self.config.n_alphas,
+            eps=self.config.eps,
+        )
+        self.alpha_path_ = np.asarray(alpha_path, dtype=float)
+        self.coef_path_ = np.asarray(coef_path.T, dtype=float)
+
+        rows: List[Dict[str, float]] = []
+        best_idx = None
+        best_valid_mse = None
+        for idx, alpha in enumerate(self.alpha_path_):
+            pred = X_valid_std @ self.coef_path_[idx] + stats.y_mean
+            mse = float(mean_squared_error(valid_split.y, pred))
+            support_size = int(np.count_nonzero(np.abs(self.coef_path_[idx]) > self.config.coef_tol))
+            rows.append(
+                {
+                    "alpha": float(alpha),
+                    "valid_mse": mse,
+                    "support_size": float(support_size),
+                }
+            )
+            if best_valid_mse is None or mse < best_valid_mse:
+                best_valid_mse = mse
+                best_idx = idx
+
+        self.selection_trace_ = pd.DataFrame(rows)
+        self.selected_alpha_ = float(self.alpha_path_[best_idx])
+        self.selected_coef_ = self.coef_path_[best_idx].copy()
+        self.selected_support_ = np.flatnonzero(np.abs(self.selected_coef_) > self.config.coef_tol).astype(int)
+        return self
+
+    def predict(self, X: Array, alpha: Optional[float] = None) -> Array:
+        if self.coef_path_ is None or self.alpha_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        stats = _require_standardization(self.standardization_)
+        X_std = _transform_features(X, stats)
+        if alpha is None:
+            coef = self.selected_coef_
+        else:
+            idx = int(np.argmin(np.abs(self.alpha_path_ - float(alpha))))
+            coef = self.coef_path_[idx]
+        return X_std @ coef + stats.y_mean
+
+    def support_at_alpha(self, alpha: Optional[float] = None) -> Array:
+        if self.coef_path_ is None or self.alpha_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        if alpha is None:
+            coef = self.selected_coef_
+        else:
+            idx = int(np.argmin(np.abs(self.alpha_path_ - float(alpha))))
+            coef = self.coef_path_[idx]
+        return np.flatnonzero(np.abs(coef) > self.config.coef_tol).astype(int)
+
+
+class XGBTreeRegressorWrapper(SparseRegressionWrapperBase):
+    def __init__(
+        self,
+        config: XGBTreeConfig,
+        selection_checkpoints: Optional[Sequence[int]] = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.selection_checkpoints = _resolve_checkpoints(
+            selection_checkpoints,
+            max_checkpoint=config.n_estimators,
+            default_points=min(25, config.n_estimators),
+        )
+        self.model = None
+        self.selected_checkpoint_: Optional[int] = None
+        self.feature_importances_: Optional[Array] = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def fit(
+        self,
+        train_split: SparseRegressionSplit,
+        valid_split: SparseRegressionSplit,
+    ) -> "XGBTreeRegressorWrapper":
+        if XGBRegressor is None:  # pragma: no cover
+            raise ImportError("xgboost is not installed, but XGBTreeRegressorWrapper was requested")
+        self.model = XGBRegressor(
+            n_estimators=self.config.n_estimators,
+            max_depth=self.config.max_depth,
+            learning_rate=self.config.learning_rate,
+            subsample=self.config.subsample,
+            colsample_bytree=self.config.colsample_bytree,
+            reg_lambda=self.config.reg_lambda,
+            objective="reg:squarederror",
+            tree_method="hist",
+            random_state=self.config.random_state,
+            n_jobs=1,
+            verbosity=0,
+        )
+        self.model.fit(train_split.X, train_split.y)
+
+        rows: List[Dict[str, float]] = []
+        best_checkpoint = None
+        best_valid_mse = None
+        for checkpoint in self.selection_checkpoints:
+            pred = np.asarray(self.model.predict(valid_split.X, iteration_range=(0, int(checkpoint))), dtype=float)
+            mse = float(mean_squared_error(valid_split.y, pred))
+            rows.append(
+                {
+                    "checkpoint": int(checkpoint),
+                    "valid_mse": mse,
+                }
+            )
+            if best_valid_mse is None or mse < best_valid_mse:
+                best_valid_mse = mse
+                best_checkpoint = int(checkpoint)
+
+        self.selection_trace_ = pd.DataFrame(rows)
+        self.selected_checkpoint_ = int(best_checkpoint)
+        self.feature_importances_ = np.asarray(self.model.feature_importances_, dtype=float)
+        self.selected_support_ = np.flatnonzero(self.feature_importances_ > 0).astype(int)
+        return self
+
+    def predict(self, X: Array, checkpoint: Optional[int] = None) -> Array:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        use_checkpoint = int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)
+        return np.asarray(self.model.predict(X, iteration_range=(0, use_checkpoint)), dtype=float)
+
+    def predict_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        out: Dict[int, Array] = {}
+        for checkpoint in sorted({int(c) for c in checkpoints}):
+            _validate_step(checkpoint, self.config.n_estimators)
+            out[int(checkpoint)] = np.asarray(self.model.predict(X, iteration_range=(0, checkpoint)), dtype=float)
+        return out
+
+    def topk_support(self, k: int) -> Array:
+        if self.feature_importances_ is None:
+            raise RuntimeError("Model has not been fit")
+        if k <= 0:
+            raise ValueError("k must be positive")
+        k = min(int(k), self.feature_importances_.shape[0])
+        order = np.argsort(-self.feature_importances_)
+        return np.sort(order[:k].astype(int))
+
+
+def build_experiment4_model(
+    model_name: str,
+    *,
+    random_state: int = 0,
+    selection_checkpoints: Optional[Sequence[int]] = None,
+    trajectory_checkpoints: Optional[Sequence[int]] = None,
+    **kwargs,
+):
+    name = str(model_name)
+    if name == "l2boost":
+        config = L2BoostingConfig(random_state=random_state, **kwargs)
+        return L2BoostingRegressorWrapper(
+            config=config,
+            selection_checkpoints=selection_checkpoints,
+            trajectory_checkpoints=trajectory_checkpoints,
+        )
+    if name == "bagged_componentwise":
+        config = BaggedComponentwiseConfig(random_state=random_state, **kwargs)
+        return BaggedComponentwiseRegressorWrapper(
+            config=config,
+            selection_checkpoints=selection_checkpoints,
+        )
+    if name == "lasso":
+        config = LassoPathConfig(random_state=random_state, **kwargs)
+        return LassoPathRegressorWrapper(config=config)
+    if name == "xgb_tree":
+        config = XGBTreeConfig(random_state=random_state, **kwargs)
+        return XGBTreeRegressorWrapper(config=config, selection_checkpoints=selection_checkpoints)
+    raise ValueError(f"Unsupported model_name={model_name!r}")
+
+
+def default_experiment4_model_grid(random_state: int = 0) -> Dict[str, Dict[str, object]]:
+    return {
+        "l2boost": {
+            "max_steps": 300,
+            "learning_rate": 0.1,
+            "random_state": random_state,
+        },
+        "bagged_componentwise": {
+            "n_estimators": 100,
+            "base_max_steps": 100,
+            "learning_rate": 0.1,
+            "support_frequency_threshold": 0.5,
+            "random_state": random_state,
+        },
+        "lasso": {
+            "n_alphas": 80,
+            "eps": 1e-3,
+            "random_state": random_state,
+        },
+        "xgb_tree": {
+            "n_estimators": 300,
+            "max_depth": 4,
+            "learning_rate": 0.05,
+            "subsample": 0.9,
+            "colsample_bytree": 0.9,
+            "random_state": random_state,
+        },
+    }
+
+
+def _prepare_train_arrays(X: Array, y: Array) -> Tuple[Array, Array, StandardizationStats]:
+    x_mean = np.mean(X, axis=0)
+    x_std = np.std(X, axis=0)
+    x_std = np.where(x_std < 1e-12, 1.0, x_std)
+    y_mean = float(np.mean(y))
+    X_std = (X - x_mean) / x_std
+    y_centered = y - y_mean
+    stats = StandardizationStats(x_mean=x_mean.astype(float), x_std=x_std.astype(float), y_mean=y_mean)
+    return X_std.astype(float), y_centered.astype(float), stats
+
+
+def _transform_features(X: Array, stats: StandardizationStats) -> Array:
+    return ((X - stats.x_mean) / stats.x_std).astype(float)
+
+
+def _fit_l2boost_path(
+    X: Array,
+    y_centered: Array,
+    max_steps: int,
+    learning_rate: float,
+) -> L2BoostPathResult:
+    if max_steps <= 0:
+        raise ValueError("max_steps must be positive")
+    if not (0.0 < learning_rate <= 1.0):
+        raise ValueError("learning_rate must lie in (0, 1]")
+
+    n_samples, p = X.shape
+    coef = np.zeros(p, dtype=float)
+    pred = np.zeros(n_samples, dtype=float)
+    denom = np.sum(X * X, axis=0)
+    denom = np.where(denom < 1e-12, 1.0, denom)
+
+    coef_path = np.zeros((max_steps, p), dtype=float)
+    train_prediction_path = np.zeros((max_steps, n_samples), dtype=float)
+    selected_feature_path = np.zeros(max_steps, dtype=int)
+
+    for step in range(max_steps):
+        residual = y_centered - pred
+        numer = X.T @ residual
+        gamma = numer / denom
+        improvement = (numer**2) / denom
+        best_feature = int(np.argmax(improvement))
+        update = float(learning_rate * gamma[best_feature])
+        coef[best_feature] += update
+        pred = pred + update * X[:, best_feature]
+
+        coef_path[step] = coef
+        train_prediction_path[step] = pred
+        selected_feature_path[step] = best_feature
+
+    return L2BoostPathResult(
+        coef_path=coef_path,
+        selected_feature_path=selected_feature_path,
+        train_prediction_path=train_prediction_path,
+    )
+
+
+def _predict_centered_from_coef_path(X_std: Array, coef_path: Array) -> Array:
+    return coef_path @ X_std.T
+
+
+def _compute_entry_step(selected_feature_path: Array, p: int) -> Array:
+    entry = np.full(p, fill_value=np.inf, dtype=float)
+    for step, feature_idx in enumerate(selected_feature_path, start=1):
+        if np.isinf(entry[feature_idx]):
+            entry[feature_idx] = float(step)
+    return entry
+
+
+def _resolve_checkpoints(
+    checkpoints: Optional[Sequence[int]],
+    *,
+    max_checkpoint: int,
+    default_points: int,
+) -> List[int]:
+    if max_checkpoint <= 0:
+        raise ValueError("max_checkpoint must be positive")
+    if checkpoints is None:
+        default_points = max(1, min(int(default_points), max_checkpoint))
+        raw = np.linspace(1, max_checkpoint, num=default_points, dtype=int)
+        resolved = sorted({int(x) for x in raw.tolist()} | {1, max_checkpoint})
+    else:
+        resolved = sorted({int(x) for x in checkpoints if 1 <= int(x) <= max_checkpoint})
+    if not resolved:
+        raise ValueError("checkpoints resolved to an empty set")
+    return resolved
+
+
+def _validate_step(step: int, max_checkpoint: int) -> None:
+    if step <= 0 or step > max_checkpoint:
+        raise ValueError(f"checkpoint must lie in [1, {max_checkpoint}], got {step}")
+
+
+def _require_standardization(stats: Optional[StandardizationStats]) -> StandardizationStats:
+    if stats is None:
+        raise RuntimeError("Model has not been fit")
+    return stats

@@ -127,14 +127,23 @@ def make_covariance_matrix(
 
 
 
+def _matrix_square_root(sigma: Array) -> Array:
+    jitter = 1e-10 * np.eye(sigma.shape[0], dtype=float)
+    try:
+        return np.linalg.cholesky(sigma + jitter).astype(float)
+    except np.linalg.LinAlgError:
+        eigvals, eigvecs = np.linalg.eigh(sigma)
+        eigvals = np.clip(eigvals, 1e-10, None)
+        return (eigvecs * np.sqrt(eigvals)[None, :]).astype(float)
+
+
 def _sample_multivariate_gaussian(
     n_samples: int,
-    sigma: Array,
+    factor: Array,
     rng: np.random.Generator,
 ) -> Array:
-    mean = np.zeros(sigma.shape[0], dtype=float)
-    X = rng.multivariate_normal(mean=mean, cov=sigma, size=n_samples)
-    return X.astype(float)
+    z = rng.normal(size=(n_samples, factor.shape[0]))
+    return (z @ factor.T).astype(float)
 
 
 
@@ -262,9 +271,10 @@ def generate_sparse_regression_dataset(
         collinear_strength=collinear_strength,
     )
 
-    X_train_raw = _sample_multivariate_gaussian(n_samples=n_train, sigma=sigma, rng=rng)
-    X_valid_raw = _sample_multivariate_gaussian(n_samples=n_valid, sigma=sigma, rng=rng)
-    X_test_raw = _sample_multivariate_gaussian(n_samples=n_test, sigma=sigma, rng=rng)
+    sigma_factor = _matrix_square_root(sigma)
+    X_train_raw = _sample_multivariate_gaussian(n_samples=n_train, factor=sigma_factor, rng=rng)
+    X_valid_raw = _sample_multivariate_gaussian(n_samples=n_valid, factor=sigma_factor, rng=rng)
+    X_test_raw = _sample_multivariate_gaussian(n_samples=n_test, factor=sigma_factor, rng=rng)
 
     if standardize:
         X_train, X_valid, feature_mean, feature_std = _standardize_from_train(X_train_raw, X_valid_raw)

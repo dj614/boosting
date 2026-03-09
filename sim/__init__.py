@@ -52,6 +52,27 @@ from .experiment1_step2_models import (
     expand_model_grid,
 )
 
+from .experiment4_data import (
+    SparseRegressionDataset,
+    SparseRegressionSplit,
+    generate_sparse_regression_dataset,
+    summarize_sparse_regression_dataset,
+    top_correlated_features,
+)
+
+from .experiment4_models import (
+    BaggedComponentwiseConfig,
+    BaggedComponentwiseRegressorWrapper,
+    L2BoostingConfig,
+    L2BoostingRegressorWrapper,
+    LassoPathConfig,
+    LassoPathRegressorWrapper,
+    XGBTreeConfig,
+    XGBTreeRegressorWrapper,
+    build_experiment4_model,
+    default_experiment4_model_grid,
+)
+
 __all__ = [
     "build_analysis_summary",
     "build_model",
@@ -80,6 +101,22 @@ __all__ = [
     "EnsembleModelConfig",
     "build_binary_ensemble_wrapper",
     "expand_model_grid",
+
+    "SparseRegressionDataset",
+    "SparseRegressionSplit",
+    "generate_sparse_regression_dataset",
+    "summarize_sparse_regression_dataset",
+    "top_correlated_features",
+    "BaggedComponentwiseConfig",
+    "BaggedComponentwiseRegressorWrapper",
+    "L2BoostingConfig",
+    "L2BoostingRegressorWrapper",
+    "LassoPathConfig",
+    "LassoPathRegressorWrapper",
+    "XGBTreeConfig",
+    "XGBTreeRegressorWrapper",
+    "build_experiment4_model",
+    "default_experiment4_model_grid",
     "simulate_grouped_classification",
     "summarize_binary_classification_dataset",
     "with_margin_based_difficulty_groups",

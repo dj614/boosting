@@ -32,6 +32,19 @@ from .experiment1_step1_eval import (
     make_binary_prediction_frame,
     save_prediction_frame,
 )
+
+from .experiment1_step3_analysis import (
+    FocusPair,
+    aggregate_trajectories,
+    bootstrap_pairwise_metric_differences,
+    infer_focus_pairs,
+    load_step2_artifacts,
+    make_analysis_summary,
+    pairwise_loss_deltas,
+    summarize_group_metrics,
+    summarize_model_metrics,
+)
+
 from .experiment1_step2_models import (
     BinaryEnsembleWrapper,
     EnsembleModelConfig,
@@ -70,4 +83,13 @@ __all__ = [
     "simulate_grouped_classification",
     "summarize_binary_classification_dataset",
     "with_margin_based_difficulty_groups",
+    "FocusPair",
+    "aggregate_trajectories",
+    "bootstrap_pairwise_metric_differences",
+    "infer_focus_pairs",
+    "load_step2_artifacts",
+    "make_analysis_summary",
+    "pairwise_loss_deltas",
+    "summarize_group_metrics",
+    "summarize_model_metrics",
 ]

@@ -2,154 +2,171 @@
 from __future__ import annotations
 
 import argparse
-import json
+import sys
 from pathlib import Path
+from typing import List
 
 import pandas as pd
 
-from sim.experiment1_analysis import (
-    build_analysis_summary,
-    make_error_variance_scatter,
-    make_method_comparison_plot,
-    make_pairwise_comparison_table,
-    make_slice_heatmaps,
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from sim.experiment1_step3_analysis import (  # noqa: E402
+    FocusPair,
+    aggregate_trajectories,
+    bootstrap_pairwise_metric_differences,
+    infer_focus_pairs,
+    load_step2_artifacts,
+    make_all_pairwise_seed_comparisons,
+    make_analysis_summary,
+    make_delta_loss_distribution_plot,
+    make_group_risk_bars,
+    make_group_risk_trajectory_plot,
+    make_overall_vs_worst_group_scatter,
+    make_worst_group_trajectory_plot,
+    pairwise_loss_deltas,
     save_json,
     save_table,
+    summarize_group_metrics,
+    summarize_model_metrics,
 )
 
 
 def _make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Analyze experiment 1 step-2 outputs and create essay-ready plots.")
-    parser.add_argument(
-        "--input-dir",
-        type=Path,
-        required=True,
-        help="Directory produced by scripts/run_experiment1_step2.py",
-    )
-    parser.add_argument(
-        "--outdir",
-        type=Path,
-        default=None,
-        help="Output directory for analysis artifacts. Defaults to <input-dir>/analysis",
-    )
-    parser.add_argument(
-        "--metric",
-        type=str,
-        default=None,
-        help="Override primary error metric. Defaults to mse for regression and error_rate for classification.",
-    )
-    parser.add_argument(
-        "--pred-col",
-        type=str,
-        default=None,
-        help="Override pointwise prediction column. Defaults to pred_score for regression, pred_prob for classification.",
-    )
-    parser.add_argument(
-        "--pairwise-baseline",
-        type=str,
-        default=None,
-        help="Optional baseline method for paired difference table. Defaults to the first method alphabetically.",
-    )
-    parser.add_argument(
-        "--skip-heatmaps",
-        action="store_true",
-        help="Skip 2D slice heatmaps even if pointwise predictions are available.",
-    )
+    parser = argparse.ArgumentParser(description="Analyze experiment-1 step-2 outputs for risk redistribution.")
+    parser.add_argument("--input-dir", type=Path, required=True, help="Directory produced by scripts/run_experiment1_step2.py")
+    parser.add_argument("--outdir", type=Path, default=None, help="Defaults to <input-dir>/analysis_step3")
+    parser.add_argument("--split", type=str, default="test", help="Which split to analyze. Default: test")
+    parser.add_argument("--focus-baseline", type=str, default=None, help="Optional exact baseline model name for one focus pair")
+    parser.add_argument("--focus-candidate", type=str, default=None, help="Optional exact candidate model name for one focus pair")
+    parser.add_argument("--bootstrap-iters", type=int, default=200)
+    parser.add_argument("--baseline-top-frac", type=float, default=0.10)
     return parser
 
 
-def _load_run_config(input_dir: Path) -> dict:
-    path = input_dir / "run_config.json"
-    if not path.exists():
-        raise FileNotFoundError(f"Missing run_config.json under {input_dir}")
-    return json.loads(path.read_text())
 
+def _resolve_focus_pairs(metrics_df: pd.DataFrame, baseline: str | None, candidate: str | None) -> List[FocusPair]:
+    if baseline and candidate:
+        return [FocusPair(baseline_model=baseline, candidate_model=candidate, label=f"{candidate}_vs_{baseline}")]
+    model_names = sorted(metrics_df["model_name"].astype(str).unique().tolist()) if not metrics_df.empty else []
+    return infer_focus_pairs(model_names)
 
-def _load_trial_summary(input_dir: Path) -> pd.DataFrame:
-    path = input_dir / "trial_summary.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"Missing trial_summary.csv under {input_dir}")
-    return pd.read_csv(path)
-
-
-def _maybe_load_pointwise(input_dir: Path) -> pd.DataFrame | None:
-    path = input_dir / "pointwise_predictions.parquet"
-    if not path.exists():
-        return None
-    return pd.read_parquet(path)
 
 
 def main() -> None:
     parser = _make_parser()
     args = parser.parse_args()
 
-    input_dir: Path = args.input_dir
-    outdir: Path = args.outdir or (input_dir / "analysis")
+    input_dir = args.input_dir
+    outdir = args.outdir or (input_dir / "analysis_step3")
     outdir.mkdir(parents=True, exist_ok=True)
+    figures_dir = outdir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
 
-    run_config = _load_run_config(input_dir)
-    trial_df = _load_trial_summary(input_dir)
-    pointwise_df = _maybe_load_pointwise(input_dir)
+    artifacts = load_step2_artifacts(input_dir=input_dir, prediction_splits=[args.split])
+    model_summary = summarize_model_metrics(artifacts.metrics_summary, split=args.split)
+    group_summary = summarize_group_metrics(artifacts.group_metrics_summary, split=args.split)
+    trajectory_core_agg, trajectory_group_agg = aggregate_trajectories(
+        artifacts.trajectory_core,
+        artifacts.trajectory_groups,
+        split=args.split,
+    )
 
-    task = str(run_config["task"])
-    metric = args.metric or ("mse" if task == "regression" else "error_rate")
-    pred_col = args.pred_col or ("pred_score" if task == "regression" else "pred_prob")
-
-    summary = build_analysis_summary(trial_df=trial_df, task_type=task, primary_metric=metric)
+    summary = make_analysis_summary(artifacts.metrics_summary, split=args.split)
+    focus_pairs = _resolve_focus_pairs(artifacts.metrics_summary.loc[artifacts.metrics_summary["split"] == args.split].copy(), args.focus_baseline, args.focus_candidate)
+    summary["focus_pairs"] = [pair.__dict__ for pair in focus_pairs]
     save_json(summary, outdir / "analysis_summary.json")
 
-    method_summary = pd.DataFrame(summary["method_summary"])
-    save_table(method_summary, outdir / "method_summary_analysis.csv")
+    save_table(model_summary, outdir / "model_summary_analysis.csv")
+    save_table(group_summary, outdir / "group_summary_analysis.csv")
+    save_table(trajectory_core_agg, outdir / "trajectory_core_aggregated.csv")
+    save_table(trajectory_group_agg, outdir / "trajectory_group_aggregated.csv")
 
-    if summary["subgroup_summary"]:
-        subgroup_summary = pd.DataFrame(summary["subgroup_summary"])
-        save_table(subgroup_summary, outdir / "subgroup_summary_analysis.csv")
-
-    pairwise = make_pairwise_comparison_table(
-        trial_df=trial_df,
-        primary_metric=metric,
-        baseline_method=args.pairwise_baseline,
+    pairwise_seed = make_all_pairwise_seed_comparisons(
+        artifacts.metrics_summary,
+        split=args.split,
+        focus_pairs=focus_pairs,
     )
-    save_table(pairwise, outdir / "pairwise_comparison.csv")
+    save_table(pairwise_seed, outdir / "pairwise_seed_comparisons.csv")
 
-    make_method_comparison_plot(
-        trial_df=trial_df,
-        task_type=task,
-        primary_metric=metric,
-        outpath=outdir / "method_comparison.png",
-    )
-    make_error_variance_scatter(
-        trial_df=trial_df,
-        task_type=task,
-        primary_metric=metric,
-        outpath=outdir / "error_variance_scatter.png",
-    )
+    if not model_summary.empty:
+        make_overall_vs_worst_group_scatter(model_summary, figures_dir / "overall_vs_worst_group_scatter.png")
 
-    if pointwise_df is not None:
-        pointwise_df.to_csv(outdir / "pointwise_predictions_preview.csv", index=False)
+    bootstrap_frames = []
+    group_delta_frames = []
+    for pair in focus_pairs:
+        pair_dir = outdir / pair.label
+        pair_dir.mkdir(parents=True, exist_ok=True)
 
-    if pointwise_df is not None and not args.skip_heatmaps:
-        heatmap_dir = outdir / "slice_heatmaps"
-        heatmap_dir.mkdir(parents=True, exist_ok=True)
-        make_slice_heatmaps(
-            pointwise_df=pointwise_df,
-            task_type=task,
-            pred_col=pred_col,
-            outdir=heatmap_dir,
+        group_delta_df, merged_delta_df = pairwise_loss_deltas(
+            artifacts.predictions,
+            split=args.split,
+            baseline_model=pair.baseline_model,
+            candidate_model=pair.candidate_model,
+            baseline_top_frac=float(args.baseline_top_frac),
+        )
+        save_table(group_delta_df, pair_dir / "pairwise_group_delta.csv")
+        if not merged_delta_df.empty:
+            save_table(merged_delta_df, pair_dir / "sample_loss_deltas.csv")
+            bootstrap_df = bootstrap_pairwise_metric_differences(
+                merged_delta_df,
+                baseline_model=pair.baseline_model,
+                candidate_model=pair.candidate_model,
+                n_bootstrap=int(args.bootstrap_iters),
+            )
+            bootstrap_df.insert(0, "pair_label", pair.label)
+            bootstrap_frames.append(bootstrap_df)
+            make_delta_loss_distribution_plot(
+                merged_delta_df,
+                baseline_model=pair.baseline_model,
+                candidate_model=pair.candidate_model,
+                outpath=figures_dir / f"delta_loss_distribution_{pair.label}.png",
+            )
+        if not group_delta_df.empty:
+            group_delta_df.insert(0, "pair_label", pair.label)
+            group_delta_frames.append(group_delta_df)
+
+        make_group_risk_bars(
+            group_summary,
+            baseline_model=pair.baseline_model,
+            candidate_model=pair.candidate_model,
+            outpath=figures_dir / f"group_risk_bars_{pair.label}.png",
+        )
+        make_group_risk_trajectory_plot(
+            trajectory_group_agg,
+            baseline_model=pair.baseline_model,
+            candidate_model=pair.candidate_model,
+            outpath=figures_dir / f"group_risk_trajectory_{pair.label}.png",
+        )
+        make_worst_group_trajectory_plot(
+            trajectory_core_agg,
+            baseline_model=pair.baseline_model,
+            candidate_model=pair.candidate_model,
+            outpath=figures_dir / f"worst_group_trajectory_{pair.label}.png",
         )
 
-    text_lines = [
-        f"task={task}",
-        f"primary_metric={metric}",
-        f"n_methods={trial_df['method'].nunique()}",
-        f"n_repetitions={trial_df['rep'].nunique()}",
-        f"best_method={summary['best_method']}",
+    if bootstrap_frames:
+        save_table(pd.concat(bootstrap_frames, ignore_index=True), outdir / "bootstrap_pairwise_differences.csv")
+    else:
+        save_table(pd.DataFrame(), outdir / "bootstrap_pairwise_differences.csv")
+
+    if group_delta_frames:
+        save_table(pd.concat(group_delta_frames, ignore_index=True), outdir / "pairwise_group_deltas_all.csv")
+    else:
+        save_table(pd.DataFrame(), outdir / "pairwise_group_deltas_all.csv")
+
+    notes = [
+        f"split={args.split}",
+        f"n_models={artifacts.metrics_summary.loc[artifacts.metrics_summary['split'] == args.split, 'model_name'].nunique() if not artifacts.metrics_summary.empty else 0}",
+        f"n_focus_pairs={len(focus_pairs)}",
+        f"bootstrap_iters={int(args.bootstrap_iters)}",
     ]
-    (outdir / "analysis_notes.txt").write_text("\n".join(text_lines) + "\n")
+    (outdir / "analysis_notes.txt").write_text("\n".join(notes) + "\n")
 
     print(f"Wrote analysis summary to: {outdir / 'analysis_summary.json'}")
-    print(f"Wrote pairwise comparison to: {outdir / 'pairwise_comparison.csv'}")
-    print(f"Wrote plots to: {outdir}")
+    print(f"Wrote pairwise seed table to: {outdir / 'pairwise_seed_comparisons.csv'}")
+    print(f"Wrote figures to: {figures_dir}")
 
 
 if __name__ == "__main__":

@@ -102,6 +102,9 @@ def _oracle_frame(bundle: DatasetBundle) -> pd.DataFrame:
         "y_true": bundle.test.y,
         "f_true": bundle.test.f_true,
     }
+    max_feature_cols = min(3, bundle.test.X.shape[1])
+    for feat_idx in range(max_feature_cols):
+        data[f"feature_{feat_idx}"] = bundle.test.X[:, feat_idx]
     for key, value in bundle.test.meta.items():
         data[key] = value
     return pd.DataFrame(data)

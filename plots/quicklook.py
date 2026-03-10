@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
-import matplotlib.pyplot as plt
+import matplotlib
 import pandas as pd
 
+if os.environ.get("MPLBACKEND") is None:
+    matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 def save_prediction_interval_width_plot(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

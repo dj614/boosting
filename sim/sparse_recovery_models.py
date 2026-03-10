@@ -8,7 +8,7 @@ import pandas as pd
 from sklearn.linear_model import lasso_path
 from sklearn.metrics import mean_squared_error
 
-from .experiment4_data import SparseRegressionSplit
+from .sparse_recovery_data import SparseRegressionSplit
 
 try:  # pragma: no cover
     from xgboost import XGBRegressor

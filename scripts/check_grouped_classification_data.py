@@ -12,13 +12,13 @@ if str(ROOT) not in sys.path:
 
 from sklearn.linear_model import LogisticRegression
 
-from sim.experiment1_step1_data import (
+from sim.grouped_classification_data import (
     load_adult_income,
     simulate_grouped_classification,
     summarize_binary_classification_dataset,
     with_margin_based_difficulty_groups,
 )
-from sim.experiment1_step1_eval import evaluate_binary_predictions, make_binary_prediction_frame, save_prediction_frame
+from sim.grouped_classification_eval import evaluate_binary_predictions, make_binary_prediction_frame, save_prediction_frame
 
 
 

@@ -16,7 +16,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from sim.experiment4_data import (
+from sim.sparse_recovery_data import (
     generate_sparse_regression_dataset,
     summarize_sparse_regression_dataset,
     top_correlated_features,

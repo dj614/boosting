@@ -13,7 +13,7 @@ from sklearn.ensemble import (
 from sklearn.metrics import log_loss
 from sklearn.tree import DecisionTreeClassifier
 
-from .experiment1_step1_data import BinaryClassificationSplit
+from .grouped_classification_data import BinaryClassificationSplit
 
 try:  # pragma: no cover
     from xgboost import XGBClassifier

@@ -1,21 +1,21 @@
 """Simulation utilities for experiment 1."""
 
-from .experiment1_data import (
+from .instability_matching_data import (
     generate_dataset_bundle,
     generate_features,
     generate_latent_signal,
     make_oracle_metadata,
     summarize_dataset_bundle,
 )
-from .experiment1_eval import compute_metrics, subgroup_metrics
-from .experiment1_analysis import (
+from .instability_matching_eval import compute_metrics, subgroup_metrics
+from .instability_matching_analysis import (
     build_analysis_summary,
     make_error_variance_scatter,
     make_method_comparison_plot,
     make_pairwise_comparison_table,
 )
-from .experiment1_models import build_model, default_methods_for_task
-from .experiment1_step1_data import (
+from .instability_matching_models import build_model, default_methods_for_task
+from .grouped_classification_data import (
     BinaryClassificationDataset,
     BinaryClassificationSplit,
     load_adult_income,
@@ -23,7 +23,7 @@ from .experiment1_step1_data import (
     summarize_binary_classification_dataset,
     with_margin_based_difficulty_groups,
 )
-from .experiment1_step1_eval import (
+from .grouped_classification_eval import (
     compute_binary_classification_metrics,
     compute_groupwise_binary_metrics,
     compute_risk_redistribution_metrics,
@@ -45,14 +45,14 @@ from .experiment1_step3_analysis import (
     summarize_model_metrics,
 )
 
-from .experiment1_step2_models import (
+from .group_risk_ensemble_models import (
     BinaryEnsembleWrapper,
     EnsembleModelConfig,
     build_binary_ensemble_wrapper,
     expand_model_grid,
 )
 
-from .experiment4_data import (
+from .sparse_recovery_data import (
     SparseRegressionDataset,
     SparseRegressionSplit,
     generate_sparse_regression_dataset,
@@ -60,7 +60,7 @@ from .experiment4_data import (
     top_correlated_features,
 )
 
-from .experiment4_eval import (
+from .sparse_recovery_eval import (
     aggregate_metric_table,
     make_feature_support_frame,
     regression_metrics as experiment4_regression_metrics,
@@ -69,7 +69,7 @@ from .experiment4_eval import (
     support_recovery_metrics,
 )
 
-from .experiment4_models import (
+from .sparse_recovery_models import (
     BaggedComponentwiseConfig,
     BaggedComponentwiseRegressorWrapper,
     L2BoostingConfig,
@@ -136,12 +136,12 @@ __all__ = [
     "summarize_binary_classification_dataset",
     "with_margin_based_difficulty_groups",
     "FocusPair",
-   "aggregate_trajectories",
+    "aggregate_trajectories",
     "bootstrap_pairwise_metric_differences",
     "infer_focus_pairs",
     "load_step2_artifacts",
     "make_analysis_summary",
     "pairwise_loss_deltas",
-   "summarize_group_metrics",
-   "summarize_model_metrics",
+    "summarize_group_metrics",
+    "summarize_model_metrics",
 ]

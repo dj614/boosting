@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 import matplotlib.pyplot as plt
 import numpy as np
 
-from sim.experiment1_data import generate_dataset_bundle, summarize_dataset_bundle
+from sim.instability_matching_data import generate_dataset_bundle, summarize_dataset_bundle
 
 
 def _make_parser() -> argparse.ArgumentParser:

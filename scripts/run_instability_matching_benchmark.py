@@ -14,15 +14,15 @@ if str(ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 
-from sim.experiment1_analysis import save_json, save_table
-from sim.experiment1_data import generate_dataset_bundle, summarize_dataset_bundle
-from sim.experiment1_eval import (
+from sim.instability_matching_analysis import save_json, save_table
+from sim.instability_matching_data import generate_dataset_bundle, summarize_dataset_bundle
+from sim.instability_matching_eval import (
     aggregate_prediction_variance,
     compute_metrics,
     groupwise_prediction_variance,
     subgroup_metrics,
 )
-from sim.experiment1_models import build_model, default_methods_for_task, make_default_learner_specs
+from sim.instability_matching_models import build_model, default_methods_for_task, make_default_learner_specs
 
 
 def _make_parser() -> argparse.ArgumentParser:

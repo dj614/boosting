@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from sim.experiment4_eval import aggregate_metric_table, make_feature_support_frame, stability_selection_metrics
+from sim.sparse_recovery_eval import aggregate_metric_table, make_feature_support_frame, stability_selection_metrics
 
 
 def _make_parser() -> argparse.ArgumentParser:

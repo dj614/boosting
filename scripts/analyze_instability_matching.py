@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 
 import pandas as pd
 
-from sim.experiment1_analysis import (
+from sim.instability_matching_analysis import (
     build_analysis_summary,
     make_error_variance_scatter,
     make_method_comparison_plot,

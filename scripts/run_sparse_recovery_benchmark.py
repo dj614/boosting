@@ -14,9 +14,9 @@ if str(ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 
-from sim.experiment4_data import generate_sparse_regression_dataset, summarize_sparse_regression_dataset
-from sim.experiment4_eval import make_feature_support_frame, regression_metrics, support_recovery_metrics
-from sim.experiment4_models import build_experiment4_model
+from sim.sparse_recovery_data import generate_sparse_regression_dataset, summarize_sparse_regression_dataset
+from sim.sparse_recovery_eval import make_feature_support_frame, regression_metrics, support_recovery_metrics
+from sim.sparse_recovery_models import build_experiment4_model
 
 
 def _make_parser() -> argparse.ArgumentParser:

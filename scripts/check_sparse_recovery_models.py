@@ -12,8 +12,8 @@ if str(ROOT) not in sys.path:
 
 import numpy as np
 
-from sim.experiment4_data import generate_sparse_regression_dataset
-from sim.experiment4_models import build_experiment4_model
+from sim.sparse_recovery_data import generate_sparse_regression_dataset
+from sim.sparse_recovery_models import build_experiment4_model
 
 
 

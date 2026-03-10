@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sim.experiment1_step1_data import (  # noqa: E402
+from sim.grouped_classification_data import (  # noqa: E402
     BinaryClassificationDataset,
     BinaryClassificationSplit,
     load_adult_income,
@@ -22,14 +22,14 @@ from sim.experiment1_step1_data import (  # noqa: E402
     summarize_binary_classification_dataset,
     with_margin_based_difficulty_groups,
 )
-from sim.experiment1_step1_eval import (  # noqa: E402
+from sim.grouped_classification_eval import (  # noqa: E402
     binary_brier_per_sample,
     binary_log_loss_per_sample,
     evaluate_binary_predictions,
     make_binary_prediction_frame,
     save_prediction_frame,
 )
-from sim.experiment1_step2_models import (  # noqa: E402
+from sim.group_risk_ensemble_models import (  # noqa: E402
     build_binary_ensemble_wrapper,
     expand_model_grid,
 )

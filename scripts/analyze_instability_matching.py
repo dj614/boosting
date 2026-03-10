@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 import pandas as pd
 
+from progress_utils import tqdm_iter
 from sim.instability_matching_analysis import (
     build_analysis_summary,
     make_error_variance_scatter,
@@ -60,8 +61,12 @@ def main() -> None:
     pointwise_df = pd.read_csv(pointwise_path) if pointwise_path.exists() else None
 
     manifest: List[Dict[str, object]] = []
-    for task_type in sorted(trial_df["task_type"].dropna().astype(str).unique().tolist()):
-        for scenario in sorted(trial_df.loc[trial_df["task_type"] == task_type, "scenario"].dropna().astype(str).unique().tolist()):
+    combos = [
+        (task_type, scenario)
+        for task_type in sorted(trial_df["task_type"].dropna().astype(str).unique().tolist())
+        for scenario in sorted(trial_df.loc[trial_df["task_type"] == task_type, "scenario"].dropna().astype(str).unique().tolist())
+    ]
+    for task_type, scenario in tqdm_iter(combos, total=len(combos), desc="Experiment 1 analysis", unit="combo"):
             subset = trial_df.loc[(trial_df["task_type"] == task_type) & (trial_df["scenario"] == scenario)].copy()
             if subset.empty:
                 continue

@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from progress_utils import tqdm_iter
 from sim.sparse_recovery_eval import aggregate_metric_table, make_feature_support_frame, stability_selection_metrics
 
 
@@ -49,7 +50,8 @@ def _parse_supports(series: pd.Series) -> List[np.ndarray]:
 
 def _stability_frame(trial_df: pd.DataFrame) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
-    for (design, model_name), sub_df in trial_df.groupby(["design", "model_name"], dropna=False):
+    groups = list(trial_df.groupby(["design", "model_name"], dropna=False))
+    for (design, model_name), sub_df in tqdm_iter(groups, total=len(groups), desc="Feature frequencies", unit="group"):
         p = int(sub_df["p"].iloc[0])
         stability = stability_selection_metrics(_parse_supports(sub_df["support_hat_json"]), p=p)
         rows.append(
@@ -154,7 +156,8 @@ def main() -> None:
 
     plot_dir = outdir / "plots"
     plot_dir.mkdir(parents=True, exist_ok=True)
-    for design in sorted(trial_df["design"].dropna().astype(str).unique().tolist()):
+    design_list = sorted(trial_df["design"].dropna().astype(str).unique().tolist())
+    for design in tqdm_iter(design_list, total=len(design_list), desc="Sparse recovery plots", unit="design"):
         _plot_metric_bar(merged_df, design, "test_mse_mean", "Mean test MSE", plot_dir / f"{design}_test_mse.png")
         _plot_metric_bar(merged_df, design, "support_f1_mean", "Mean support F1", plot_dir / f"{design}_support_f1.png")
         _plot_metric_bar(merged_df, design, "pairwise_jaccard_mean", "Support stability (Jaccard)", plot_dir / f"{design}_stability.png")

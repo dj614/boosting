@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 
+from progress_utils import progress_bar, tqdm_iter
 from sim.instability_matching_analysis import save_json, save_table
 from sim.instability_matching_data import generate_dataset_bundle, summarize_dataset_bundle
 from sim.instability_matching_eval import (
@@ -156,69 +157,89 @@ def main() -> None:
     pointwise_frames: List[pd.DataFrame] = []
     dataset_rows: List[Dict[str, object]] = []
 
-    for task_type in args.tasks:
-        methods = _resolve_methods(task_type, args.methods)
-        for scenario in args.scenarios:
-            for rep in range(args.num_seeds):
-                bundle = generate_dataset_bundle(
-                    task_type=task_type,
-                    scenario=scenario,
-                    n_train=args.n_train,
-                    n_valid=args.n_valid,
-                    n_test=args.n_test,
-                    p=args.p,
-                    feature_dist=args.feature_dist,
-                    noise_type=args.noise_type,
-                    noise_scale=args.noise_scale,
-                    seed=args.base_seed + rep,
-                )
-                split = _split_from_bundle(bundle, args.eval_split)
-                dataset_summary = summarize_dataset_bundle(bundle)
-                dataset_summary.update({"task_type": task_type, "scenario": scenario, "rep": rep})
-                dataset_rows.append(dataset_summary)
+    total_method_trials = sum(
+        len(_resolve_methods(task_type, args.methods)) * len(args.scenarios) * args.num_seeds for task_type in args.tasks
+    )
 
-                bootstrap_rng = np.random.default_rng(args.base_seed + 10000 * (rep + 1))
-                bootstrap_indices = [
-                    _bootstrap_indices(bundle.train.X.shape[0], rng=bootstrap_rng) for _ in range(args.bootstrap_reps)
-                ]
-                for method in methods:
-                    pred_list: List[np.ndarray] = []
-                    for bootstrap_id, train_idx in enumerate(bootstrap_indices):
-                        model = build_model(method, task_type=task_type, random_state=(args.base_seed + rep * 1000 + bootstrap_id))
-                        _force_single_thread(model)
-                        model.fit(bundle.train.X[train_idx], bundle.train.y[train_idx])
-                        if task_type == "classification":
-                            pred = model.predict_proba(split.X)
-                        else:
-                            pred = model.predict(split.X)
-                        pred_list.append(np.asarray(pred, dtype=float).reshape(-1))
-
-                    pred_matrix = np.vstack(pred_list)
-                    mean_pred = pred_matrix.mean(axis=0)
-                    trial_rows.append(
-                        _trial_row(
-                            task_type=task_type,
-                            scenario=scenario,
-                            rep=rep,
-                            method=method,
-                            bootstrap_reps=args.bootstrap_reps,
-                            y_true=np.asarray(split.y),
-                            mean_pred=mean_pred,
-                            pred_matrix=pred_matrix,
-                            meta=split.meta,
-                        )
+    with progress_bar(total=total_method_trials, desc="Experiment 1 benchmark", unit="model") as pbar:
+        for task_type in args.tasks:
+            methods = _resolve_methods(task_type, args.methods)
+            for scenario in args.scenarios:
+                for rep in range(args.num_seeds):
+                    bundle = generate_dataset_bundle(
+                        task_type=task_type,
+                        scenario=scenario,
+                        n_train=args.n_train,
+                        n_valid=args.n_valid,
+                        n_test=args.n_test,
+                        p=args.p,
+                        feature_dist=args.feature_dist,
+                        noise_type=args.noise_type,
+                        noise_scale=args.noise_scale,
+                        seed=args.base_seed + rep,
                     )
-                    if args.save_pointwise:
-                        pointwise_frames.append(
-                            _pointwise_frame(
+                    split = _split_from_bundle(bundle, args.eval_split)
+                    dataset_summary = summarize_dataset_bundle(bundle)
+                    dataset_summary.update({"task_type": task_type, "scenario": scenario, "rep": rep})
+                    dataset_rows.append(dataset_summary)
+
+                    bootstrap_rng = np.random.default_rng(args.base_seed + 10000 * (rep + 1))
+                    bootstrap_indices = [
+                        _bootstrap_indices(bundle.train.X.shape[0], rng=bootstrap_rng) for _ in range(args.bootstrap_reps)
+                    ]
+                    for method in methods:
+                        pbar.set_postfix(task=task_type, scenario=scenario, rep=rep, method=method)
+                        pred_list: List[np.ndarray] = []
+                        bootstrap_desc = f"{task_type}/{scenario}/rep{rep}/{method}"
+                        for bootstrap_id, train_idx in enumerate(
+                            tqdm_iter(
+                                bootstrap_indices,
+                                total=len(bootstrap_indices),
+                                desc=bootstrap_desc,
+                                unit="boot",
+                                leave=False,
+                            )
+                        ):
+                            model = build_model(
+                                method,
+                                task_type=task_type,
+                                random_state=(args.base_seed + rep * 1000 + bootstrap_id),
+                            )
+                            _force_single_thread(model)
+                            model.fit(bundle.train.X[train_idx], bundle.train.y[train_idx])
+                            if task_type == "classification":
+                                pred = model.predict_proba(split.X)
+                            else:
+                                pred = model.predict(split.X)
+                            pred_list.append(np.asarray(pred, dtype=float).reshape(-1))
+
+                        pred_matrix = np.vstack(pred_list)
+                        mean_pred = pred_matrix.mean(axis=0)
+                        trial_rows.append(
+                            _trial_row(
                                 task_type=task_type,
                                 scenario=scenario,
                                 rep=rep,
                                 method=method,
-                                split=split,
+                                bootstrap_reps=args.bootstrap_reps,
+                                y_true=np.asarray(split.y),
                                 mean_pred=mean_pred,
+                                pred_matrix=pred_matrix,
+                                meta=split.meta,
                             )
                         )
+                        if args.save_pointwise:
+                            pointwise_frames.append(
+                                _pointwise_frame(
+                                    task_type=task_type,
+                                    scenario=scenario,
+                                    rep=rep,
+                                    method=method,
+                                    split=split,
+                                    mean_pred=mean_pred,
+                                )
+                            )
+                        pbar.update(1)
 
     trial_df = pd.DataFrame(trial_rows)
     dataset_df = pd.DataFrame(dataset_rows)

@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 
 import numpy as np
 import pandas as pd
-
+from progress_utils import progress_bar
 from sim.sparse_recovery_data import generate_sparse_regression_dataset, summarize_sparse_regression_dataset
 from sim.sparse_recovery_eval import make_feature_support_frame, regression_metrics, support_recovery_metrics
 from sim.sparse_recovery_models import build_experiment4_model
@@ -169,58 +169,63 @@ def main() -> None:
     trial_rows: List[Dict[str, object]] = []
     dataset_rows: List[Dict[str, object]] = []
 
-    for design in args.designs:
-        for rep in range(args.num_seeds):
-            seed = args.base_seed + rep
-            dataset = generate_sparse_regression_dataset(
-                n_train=args.n_train,
-                n_valid=args.n_valid,
-                n_test=args.n_test,
-                p=args.p,
-                s=args.s,
-                design=design,
-                rho=args.rho,
-                block_size=args.block_size,
-                beta_scale=args.beta_scale,
-                beta_pattern=args.beta_pattern,
-                support_strategy=args.support_strategy,
-                snr=args.snr,
-                seed=seed,
-            )
-            summary = summarize_sparse_regression_dataset(dataset)
-            summary.update({"design": design, "rep": rep, "seed": seed})
-            dataset_rows.append(summary)
+    total_model_fits = len(args.designs) * args.num_seeds * len(args.models)
 
-            for model_name in args.models:
-                model = build_experiment4_model(model_name=model_name, random_state=seed)
-                model.fit(dataset.train, dataset.valid)
-                support_hat, support_mode = _resolve_support_hat(model_name, model, dataset, args.xgb_support_k)
-                trial_rows.append(
-                    _trial_row(
-                        design=design,
-                        rep=rep,
-                        model_name=model_name,
-                        dataset=dataset,
-                        model=model,
-                        support_hat=support_hat,
-                        support_mode=support_mode,
-                    )
+    with progress_bar(total=total_model_fits, desc="Experiment 4 benchmark", unit="model") as pbar:
+        for design in args.designs:
+            for rep in range(args.num_seeds):
+                seed = args.base_seed + rep
+                dataset = generate_sparse_regression_dataset(
+                    n_train=args.n_train,
+                    n_valid=args.n_valid,
+                    n_test=args.n_test,
+                    p=args.p,
+                    s=args.s,
+                    design=design,
+                    rho=args.rho,
+                    block_size=args.block_size,
+                    beta_scale=args.beta_scale,
+                    beta_pattern=args.beta_pattern,
+                    support_strategy=args.support_strategy,
+                    snr=args.snr,
+                    seed=seed,
                 )
+                summary = summarize_sparse_regression_dataset(dataset)
+                summary.update({"design": design, "rep": rep, "seed": seed})
+                dataset_rows.append(summary)
 
-                trace = getattr(model, "selection_trace_", None)
-                if trace is not None:
-                    trace = trace.copy()
-                    trace.insert(0, "model_name", model_name)
-                    trace.insert(0, "rep", rep)
-                    trace.insert(0, "design", design)
-                    _save_table(trace, traces_dir / f"{design}__rep{rep:02d}__{model_name}.csv")
+                for model_name in args.models:
+                    pbar.set_postfix(design=design, rep=rep, model=model_name)
+                    model = build_experiment4_model(model_name=model_name, random_state=seed)
+                    model.fit(dataset.train, dataset.valid)
+                    support_hat, support_mode = _resolve_support_hat(model_name, model, dataset, args.xgb_support_k)
+                    trial_rows.append(
+                        _trial_row(
+                            design=design,
+                            rep=rep,
+                            model_name=model_name,
+                            dataset=dataset,
+                            model=model,
+                            support_hat=support_hat,
+                            support_mode=support_mode,
+                        )
+                    )
 
-                if args.save_feature_tables:
-                    feature_frame = _feature_frame_for_model(model_name, model, dataset, support_hat, support_mode)
-                    feature_frame.insert(0, "model_name", model_name)
-                    feature_frame.insert(0, "rep", rep)
-                    feature_frame.insert(0, "design", design)
-                    _save_table(feature_frame, features_dir / f"{design}__rep{rep:02d}__{model_name}.csv")
+                    trace = getattr(model, "selection_trace_", None)
+                    if trace is not None:
+                        trace = trace.copy()
+                        trace.insert(0, "model_name", model_name)
+                        trace.insert(0, "rep", rep)
+                        trace.insert(0, "design", design)
+                        _save_table(trace, traces_dir / f"{design}__rep{rep:02d}__{model_name}.csv")
+
+                    if args.save_feature_tables:
+                        feature_frame = _feature_frame_for_model(model_name, model, dataset, support_hat, support_mode)
+                        feature_frame.insert(0, "model_name", model_name)
+                        feature_frame.insert(0, "rep", rep)
+                        feature_frame.insert(0, "design", design)
+                        _save_table(feature_frame, features_dir / f"{design}__rep{rep:02d}__{model_name}.csv")
+                    pbar.update(1)
 
     trial_df = pd.DataFrame(trial_rows)
     dataset_df = pd.DataFrame(dataset_rows)

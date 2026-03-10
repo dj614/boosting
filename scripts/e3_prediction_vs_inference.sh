@@ -51,6 +51,8 @@ export INF_N_ESTIMATORS="${INF_N_ESTIMATORS:-200}"
 export INF_MAX_DEPTH="${INF_MAX_DEPTH:-6}"
 export INF_MIN_SAMPLES_LEAF="${INF_MIN_SAMPLES_LEAF:-5}"
 
+echo "[e3] Running prediction and inference benchmark..."
+
 python - <<'PY'
 from __future__ import annotations
 
@@ -74,6 +76,7 @@ from metrics import evaluate_grouped_inference, evaluate_prediction_uq
 from models.baselines import GroupedPartialLinearBaseline, RandomForestConformalRegressor
 from plots.quicklook import save_grouped_inference_ci_plot, save_prediction_interval_width_plot
 
+from progress_utils import tqdm_iter
 
 def summarize_numeric_table(frame: pd.DataFrame) -> dict[str, float]:
     numeric = frame.select_dtypes(include=["number"])
@@ -133,7 +136,7 @@ pred_out = outdir / "prediction"
 pred_out.mkdir(parents=True, exist_ok=True)
 pred_rows = []
 pred_pointwise = []
-for seed in seeds:
+for seed in tqdm_iter(seeds, total=len(seeds), desc="Experiment 3 prediction", unit="seed"):
     dataset = generate_heteroscedastic_regression_dataset(seed=seed, **config["prediction"]["data"])
     model = RandomForestConformalRegressor(alpha=alpha, random_state=seed, **config["prediction"]["model"])
     model.fit(dataset)
@@ -175,7 +178,7 @@ save_prediction_interval_width_plot(pred_pointwise_df, pred_out / "prediction_in
 inf_out = outdir / "inference"
 inf_out.mkdir(parents=True, exist_ok=True)
 inf_rows = []
-for seed in seeds:
+for seed in tqdm_iter(seeds, total=len(seeds), desc="Experiment 3 inference", unit="seed"):
     dataset = generate_grouped_partial_linear_dataset(seed=seed, **config["inference"]["data"])
     model = GroupedPartialLinearBaseline(random_state=seed, **config["inference"]["model"])
     model.fit(dataset)

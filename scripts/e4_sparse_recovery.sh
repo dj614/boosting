@@ -85,6 +85,8 @@ run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --save-feature-tables \
   --outdir "$OUTDIR"
 
+echo "[e4] Benchmark complete. Starting analysis..."
+
 run_repo_script scripts/analyze_sparse_recovery.py \
   --input-dir "$OUTDIR" \
   --outdir "$OUTDIR/analysis" \

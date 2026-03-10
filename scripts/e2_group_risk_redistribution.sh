@@ -86,6 +86,7 @@ run_repo_script scripts/run_group_risk_trajectory_benchmark.py \
   --trajectory-sample-count-per-group "$TRAJ_SAMPLES_PER_GROUP" \
   --outdir "$OUTDIR"
 
+echo "[e2] Benchmark complete. Starting analysis..."
 run_repo_script scripts/analyze_group_risk_redistribution.py \
   --input-dir "$OUTDIR" \
   --outdir "$OUTDIR/analysis" \

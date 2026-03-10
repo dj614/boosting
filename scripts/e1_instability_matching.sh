@@ -78,6 +78,7 @@ run_repo_script scripts/run_instability_matching_benchmark.py \
   --save-pointwise \
   --outdir "$OUTDIR"
 
+echo "[e1] Benchmark complete. Starting analysis..."
 run_repo_script scripts/analyze_instability_matching.py \
   --input-dir "$OUTDIR" \
   --outdir "$OUTDIR/analysis"

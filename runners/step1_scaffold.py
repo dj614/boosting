@@ -9,7 +9,7 @@ import pandas as pd
 
 from data import generate_grouped_partial_linear_dataset, generate_heteroscedastic_regression_dataset
 from metrics import evaluate_grouped_inference, evaluate_prediction_uq
-from models import GroupedPartialLinearBaseline, RandomForestConformalRegressor
+from models.registry import INFERENCE_MODELS, PREDICTION_MODELS
 from plots.quicklook import save_grouped_inference_ci_plot, save_prediction_interval_width_plot
 
 try:
@@ -17,14 +17,6 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for the step-1 scaffold runner") from exc
 
-
-PREDICTION_BASELINES = {
-    "rf_conformal": RandomForestConformalRegressor,
-}
-
-INFERENCE_BASELINES = {
-    "grouped_partial_linear_baseline": GroupedPartialLinearBaseline,
-}
 
 
 def load_yaml_config(path: Path) -> Dict[str, Any]:
@@ -71,7 +63,7 @@ def _run_prediction_track(
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     model_name = str(config.get("model_name", "rf_conformal"))
-    model_cls = PREDICTION_BASELINES[model_name]
+    model_cls = PREDICTION_MODELS[model_name]
     data_params = dict(config.get("data", {}))
     model_params = dict(config.get("model", {}))
 
@@ -129,7 +121,7 @@ def _run_inference_track(
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     model_name = str(config.get("model_name", "grouped_partial_linear_baseline"))
-    model_cls = INFERENCE_BASELINES[model_name]
+    model_cls = INFERENCE_MODELS[model_name]
     data_params = dict(config.get("data", {}))
     model_params = dict(config.get("model", {}))
 

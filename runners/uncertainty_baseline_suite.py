@@ -15,7 +15,7 @@ from plots.quicklook import save_grouped_inference_ci_plot, save_prediction_inte
 try:
     import yaml
 except Exception as exc:  # pragma: no cover
-    raise RuntimeError("PyYAML is required for the step-1 scaffold runner") from exc
+    raise RuntimeError("PyYAML is required for the uncertainty baseline suite runner") from exc
 
 
 
@@ -171,3 +171,6 @@ def _run_inference_track(
 def _summarize_numeric_table(frame: pd.DataFrame) -> Dict[str, float]:
     numeric = frame.select_dtypes(include=["number"])
     return {f"{col}_mean": float(numeric[col].mean()) for col in numeric.columns if col != "seed"}
+
+def run_uncertainty_baseline_suite(config: Dict[str, Any], output_root: Path) -> Dict[str, object]:
+    return run_step1_experiment(config=config, output_root=output_root)

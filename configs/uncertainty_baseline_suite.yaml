@@ -1,4 +1,5 @@
-experiment_name: step1_scaffold
+experiment_name: experiment3_prediction_vs_inference
+output_root: outputs/experiment3_prediction_vs_inference
 output_root: outputs/step1_scaffold
 n_seeds: 3
 seed_start: 0

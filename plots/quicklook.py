@@ -31,7 +31,7 @@ def save_grouped_inference_ci_plot(frame: pd.DataFrame, path: Path) -> None:
     plt.errorbar(
         plot_frame["beta_hat"],
         list(y_pos),
-        xerr=[plot_frame["beta_hat"] - plot_frame["ci_lower"], plot_frame["ci_upper"] - plot_frame["beta_hat"]],
+        xerr=[(plot_frame["beta_hat"] - plot_frame["ci_lower"]).to_numpy(), (plot_frame["ci_upper"] - plot_frame["beta_hat"]).to_numpy()],
         fmt="o",
         capsize=3,
     )

@@ -57,7 +57,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import types
 from pathlib import Path
 
 import pandas as pd
@@ -69,13 +68,6 @@ outdir.mkdir(parents=True, exist_ok=True)
 
 if str(repo_dir) not in sys.path:
     sys.path.insert(0, str(repo_dir))
-
-# The uploaded repo is missing models/registry.py, but models/baselines.py is present.
-# We inject a tiny stub so imports succeed without modifying the repo.
-registry_stub = types.ModuleType("models.registry")
-registry_stub.INFERENCE_MODELS = {}
-registry_stub.PREDICTION_MODELS = {}
-sys.modules.setdefault("models.registry", registry_stub)
 
 from data import generate_grouped_partial_linear_dataset, generate_heteroscedastic_regression_dataset
 from metrics import evaluate_grouped_inference, evaluate_prediction_uq
@@ -238,4 +230,8 @@ print(json.dumps(summary, indent=2))
 print(f"Wrote outputs to: {outdir}")
 PY
 
-echo "Experiment 3 finished. Outputs: $REPO_DIR/$OUTDIR"
+if [[ "$OUTDIR" = /* ]]; then
+  echo "Experiment 3 finished. Outputs: $OUTDIR"
+else
+  echo "Experiment 3 finished. Outputs: $REPO_DIR/$OUTDIR"
+fi

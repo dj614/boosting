@@ -110,7 +110,7 @@ PY
 }
 
 OUTDIR="${OUTDIR:-outputs/experiment4_sparse_recovery}"
-NUM_SEEDS="${NUM_SEEDS:-10}"
+NUM_SEEDS="${NUM_SEEDS:-5}"
 BASE_SEED="${BASE_SEED:-0}"
 N_TRAIN="${N_TRAIN:-200}"
 N_VALID="${N_VALID:-200}"

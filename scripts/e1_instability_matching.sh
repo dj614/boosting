@@ -110,7 +110,7 @@ PY
 }
 
 OUTDIR="${OUTDIR:-outputs/experiment1_instability}"
-NUM_SEEDS="${NUM_SEEDS:-10}"
+NUM_SEEDS="${NUM_SEEDS:-5}"
 BASE_SEED="${BASE_SEED:-0}"
 BOOTSTRAP_REPS="${BOOTSTRAP_REPS:-25}"
 N_TRAIN="${N_TRAIN:-500}"

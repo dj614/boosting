@@ -1,0 +1,39 @@
+experiment_name: step1_scaffold
+output_root: outputs/step1_scaffold
+n_seeds: 3
+seed_start: 0
+alpha: 0.1
+
+prediction:
+  enabled: true
+  model_name: rf_conformal
+  data:
+    n_train: 600
+    n_valid: 200
+    n_calib: 200
+    n_test: 1000
+    n_features: 8
+    base_noise: 0.75
+    hetero_strength: 1.25
+  model:
+    n_estimators: 200
+    max_depth: 6
+    min_samples_leaf: 5
+
+inference:
+  enabled: true
+  model_name: grouped_partial_linear_baseline
+  data:
+    n_groups: 120
+    group_size: 8
+    n_features: 6
+    beta_true: 1.0
+    group_effect_scale: 0.75
+    noise_scale: 0.75
+    within_group_corr: 0.4
+    valid_group_frac: 0.2
+    test_group_frac: 0.2
+  model:
+    n_estimators: 200
+    max_depth: 6
+    min_samples_leaf: 5

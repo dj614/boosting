@@ -22,6 +22,67 @@ export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
+WANDB_ENABLE="${WANDB_ENABLE:-0}"
+WANDB_PROJECT="${WANDB_PROJECT:-boosting}"
+WANDB_ENTITY="${WANDB_ENTITY:-}"
+WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-}"
+WANDB_NAME="${WANDB_NAME:-}"
+WANDB_TAGS="${WANDB_TAGS:-}"
+WANDB_NOTES="${WANDB_NOTES:-}"
+WANDB_MODE="${WANDB_MODE:-online}"
+WANDB_MAX_TABLE_ROWS="${WANDB_MAX_TABLE_ROWS:-5000}"
+WANDB_LOG_ARTIFACTS="${WANDB_LOG_ARTIFACTS:-1}"
+
+maybe_log_to_wandb() {
+  local output_dir="$1"
+  local job_type="$2"
+  local default_name="$3"
+  local default_tags="$4"
+
+  if [[ "$WANDB_ENABLE" != "1" ]]; then
+    return 0
+  fi
+
+  local args=(
+    scripts/log_outputs_to_wandb.py
+    --output-dir "$output_dir"
+    --project "$WANDB_PROJECT"
+    --job-type "$job_type"
+    --mode "$WANDB_MODE"
+    --max-table-rows "$WANDB_MAX_TABLE_ROWS"
+  )
+
+  if [[ -n "$WANDB_ENTITY" ]]; then
+    args+=(--entity "$WANDB_ENTITY")
+  fi
+  if [[ -n "$WANDB_RUN_GROUP" ]]; then
+    args+=(--group "$WANDB_RUN_GROUP")
+  fi
+  if [[ -n "$WANDB_NOTES" ]]; then
+    args+=(--notes "$WANDB_NOTES")
+  fi
+
+  local run_name="$default_name"
+  if [[ -n "$WANDB_NAME" ]]; then
+    run_name="$WANDB_NAME"
+  fi
+  args+=(--name "$run_name")
+
+  local tags="$default_tags"
+  if [[ -n "$WANDB_TAGS" ]]; then
+    tags="$WANDB_TAGS"
+  fi
+  if [[ -n "$tags" ]]; then
+    args+=(--tags "$tags")
+  fi
+  if [[ "$WANDB_LOG_ARTIFACTS" == "1" ]]; then
+    args+=(--log-artifact)
+  fi
+
+  echo "[wandb] Logging outputs from $output_dir ..."
+  python "${args[@]}"
+}
+
 export OUTDIR="${OUTDIR:-outputs/experiment3_prediction_vs_inference}"
 export N_SEEDS="${N_SEEDS:-5}"
 export SEED_START="${SEED_START:-0}"
@@ -232,6 +293,8 @@ with (outdir / "artifact_summary.json").open("w", encoding="utf-8") as f:
 print(json.dumps(summary, indent=2))
 print(f"Wrote outputs to: {outdir}")
 PY
+
+maybe_log_to_wandb "$OUTDIR" "experiment3" "experiment3-prediction-vs-inference" "experiment3,prediction,inference"
 
 if [[ "$OUTDIR" = /* ]]; then
   echo "Experiment 3 finished. Outputs: $OUTDIR"

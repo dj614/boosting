@@ -59,6 +59,7 @@ class CTBSparseConfig:
     instability_penalty: float = 0.0
     weight_power: float = 1.0
     weight_eps: float = 1e-8
+    support_frequency_threshold: float = 0.5
     coef_tol: float = 1e-10
     random_state: int = 0
 
@@ -479,8 +480,10 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         for step in self.selection_checkpoints:
             pred_valid = valid_pred_path[step - 1] + stats.y_mean
             mse = float(mean_squared_error(valid_split.y, pred_valid))
-            coef_step = coef_path[step - 1]
-            support_size = int(np.count_nonzero(np.abs(coef_step) > self.config.coef_tol))
+            selection_freq_step = selection_frequency_path[step - 1]
+            support_size = int(
+                np.count_nonzero(selection_freq_step >= self.config.support_frequency_threshold)
+            )
             rows.append(
                 {
                     "checkpoint": int(step),
@@ -498,7 +501,9 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         self.selected_step_ = int(best_step)
         self.selected_coef_ = coef_path[self.selected_step_ - 1].copy()
         self.selection_frequency_ = selection_frequency_path[self.selected_step_ - 1].copy()
-        self.selected_support_ = np.flatnonzero(np.abs(self.selected_coef_) > self.config.coef_tol).astype(int)
+        self.selected_support_ = np.flatnonzero(
+            self.selection_frequency_ >= self.config.support_frequency_threshold
+        ).astype(int)
         return self
 
     def coef_at_step(self, step: Optional[int] = None) -> Array:
@@ -526,8 +531,14 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         return out
 
     def support_at_step(self, step: Optional[int] = None) -> Array:
-        coef = self.coef_at_step(step=step)
-        return np.flatnonzero(np.abs(coef) > self.config.coef_tol).astype(int)
+        if self.selection_frequency_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_step = int(step or self.selected_step_ or self.config.max_steps)
+        _validate_step(use_step, self.config.max_steps)
+        selection_freq = self.selection_frequency_path_[use_step - 1]
+        return np.flatnonzero(
+            selection_freq >= self.config.support_frequency_threshold
+        ).astype(int)
 
     def selection_frequency_at_step(self, step: Optional[int] = None) -> Array:
         if self.selection_frequency_path_ is None:
@@ -765,6 +776,7 @@ def default_experiment4_model_grid(random_state: int = 0) -> Dict[str, Dict[str,
             "instability_penalty": 0.0,
             "weight_power": 1.0,
             "weight_eps": 1e-8,
+            "support_frequency_threshold": 0.5,
             "random_state": random_state,
         },
         "lasso": {

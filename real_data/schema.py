@@ -11,8 +11,8 @@ class RealDatasetSpec:
     task_type: str
     source_type: str
     target_column: str
-    positive_aliases: Tuple[str, ...] = field(default_factory=tuple)
     positive_label: str
+    positive_aliases: Tuple[str, ...] = field(default_factory=tuple)
     openml_name: Optional[str] = None
     openml_version: Optional[int] = None
     uci_download_url: Optional[str] = None

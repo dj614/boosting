@@ -60,7 +60,17 @@ class SklearnLikeWrapper:
         return 1.0 / (1.0 + np.exp(-pred))
 
 
-def make_default_learner_specs(random_state: int = 0) -> Dict[str, LearnerSpec]:
+def make_default_learner_specs(
+    random_state: int = 0,
+    *,
+    ctb_n_estimators: int = 50,
+    ctb_inner_bootstraps: int = 8,
+    ctb_eta: float = 1.0,
+    ctb_instability_penalty: float = 0.0,
+    ctb_weight_power: float = 1.0,
+    ctb_weight_eps: float = 1e-8,
+    ctb_min_samples_leaf: int = 5,
+) -> Dict[str, LearnerSpec]:
     specs: Dict[str, LearnerSpec] = {}
 
     specs["bagging_tree_deep_regression"] = LearnerSpec(
@@ -115,13 +125,14 @@ def make_default_learner_specs(random_state: int = 0) -> Dict[str, LearnerSpec]:
         task_type="regression",
         estimator=ConsensusTransportBoosting(
             task_type="regression",
-            n_estimators=50,
-            n_inner_bootstraps=8,
-            eta=1.0,
-            instability_penalty=0.0,
-            weight_power=1.0,
+            n_estimators=ctb_n_estimators,
+            n_inner_bootstraps=ctb_inner_bootstraps,
+            eta=ctb_eta,
+            instability_penalty=ctb_instability_penalty,
+            weight_power=ctb_weight_power,
+            weight_eps=ctb_weight_eps,
             max_depth=1,
-            min_samples_leaf=5,
+            min_samples_leaf=ctb_min_samples_leaf,
             random_state=random_state,
         ),
     )
@@ -130,13 +141,14 @@ def make_default_learner_specs(random_state: int = 0) -> Dict[str, LearnerSpec]:
         task_type="regression",
         estimator=ConsensusTransportBoosting(
             task_type="regression",
-            n_estimators=50,
-            n_inner_bootstraps=8,
-            eta=1.0,
-            instability_penalty=0.0,
-            weight_power=1.0,
+            n_estimators=ctb_n_estimators,
+            n_inner_bootstraps=ctb_inner_bootstraps,
+            eta=ctb_eta,
+            instability_penalty=ctb_instability_penalty,
+            weight_power=ctb_weight_power,
+            weight_eps=ctb_weight_eps,
             max_depth=3,
-            min_samples_leaf=5,
+            min_samples_leaf=ctb_min_samples_leaf,
             random_state=random_state,
         ),
     )
@@ -191,13 +203,14 @@ def make_default_learner_specs(random_state: int = 0) -> Dict[str, LearnerSpec]:
         task_type="classification",
         estimator=ConsensusTransportBoosting(
             task_type="classification",
-            n_estimators=50,
-            n_inner_bootstraps=8,
-            eta=1.0,
-            instability_penalty=0.0,
-            weight_power=1.0,
+            n_estimators=ctb_n_estimators,
+            n_inner_bootstraps=ctb_inner_bootstraps,
+            eta=ctb_eta,
+            instability_penalty=ctb_instability_penalty,
+            weight_power=ctb_weight_power,
+            weight_eps=ctb_weight_eps,
             max_depth=1,
-            min_samples_leaf=5,
+            min_samples_leaf=ctb_min_samples_leaf,
             random_state=random_state,
         ),
     )
@@ -206,13 +219,14 @@ def make_default_learner_specs(random_state: int = 0) -> Dict[str, LearnerSpec]:
         task_type="classification",
         estimator=ConsensusTransportBoosting(
             task_type="classification",
-            n_estimators=50,
-            n_inner_bootstraps=8,
-            eta=1.0,
-            instability_penalty=0.0,
-            weight_power=1.0,
+            n_estimators=ctb_n_estimators,
+            n_inner_bootstraps=ctb_inner_bootstraps,
+            eta=ctb_eta,
+            instability_penalty=ctb_instability_penalty,
+            weight_power=ctb_weight_power,
+            weight_eps=ctb_weight_eps,
             max_depth=3,
-            min_samples_leaf=5,
+            min_samples_leaf=ctb_min_samples_leaf,
             random_state=random_state,
         ),
     )
@@ -256,8 +270,13 @@ def make_default_learner_specs(random_state: int = 0) -> Dict[str, LearnerSpec]:
     return specs
 
 
-def build_model(method_name: str, task_type: TaskType, random_state: int = 0) -> SklearnLikeWrapper:
-    specs = make_default_learner_specs(random_state=random_state)
+def build_model(
+    method_name: str,
+    task_type: TaskType,
+    random_state: int = 0,
+    **spec_kwargs,
+) -> SklearnLikeWrapper:
+    specs = make_default_learner_specs(random_state=random_state, **spec_kwargs)
     if method_name not in specs:
         available = sorted(specs)
         raise KeyError(f"Unknown method_name={method_name!r}. Available: {available}")

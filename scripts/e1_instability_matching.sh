@@ -121,10 +121,20 @@ NOISE_TYPE="${NOISE_TYPE:-homoscedastic}"
 FEATURE_DIST="${FEATURE_DIST:-uniform}"
 NOISE_SCALE="${NOISE_SCALE:-0.5}"
 EVAL_SPLIT="${EVAL_SPLIT:-test}"
+CTB_N_ESTIMATORS="${CTB_N_ESTIMATORS:-50}"
+CTB_INNER_BOOTSTRAPS="${CTB_INNER_BOOTSTRAPS:-8}"
+CTB_ETA="${CTB_ETA:-1.0}"
+CTB_INSTABILITY_PENALTY="${CTB_INSTABILITY_PENALTY:-0.0}"
+CTB_WEIGHT_POWER="${CTB_WEIGHT_POWER:-1.0}"
+CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
+CTB_MIN_SAMPLES_LEAF="${CTB_MIN_SAMPLES_LEAF:-5}"
 
 run_repo_script scripts/run_instability_matching_benchmark.py \
   --tasks regression classification \
   --scenarios piecewise smooth pocket \
+  --methods \
+    bagging_tree_deep_regression bagging_tree_shallow_regression gbdt_stump_regression gbdt_depth3_regression ctb_stump_regression ctb_depth3_regression \
+    bagging_tree_deep_classification bagging_tree_shallow_classification gbdt_stump_classification gbdt_depth3_classification ctb_stump_classification ctb_depth3_classification \
   --num-seeds "$NUM_SEEDS" \
   --base-seed "$BASE_SEED" \
   --bootstrap-reps "$BOOTSTRAP_REPS" \
@@ -136,6 +146,13 @@ run_repo_script scripts/run_instability_matching_benchmark.py \
   --noise-type "$NOISE_TYPE" \
   --feature-dist "$FEATURE_DIST" \
   --noise-scale "$NOISE_SCALE" \
+  --ctb-n-estimators "$CTB_N_ESTIMATORS" \
+  --ctb-inner-bootstraps "$CTB_INNER_BOOTSTRAPS" \
+  --ctb-eta "$CTB_ETA" \
+  --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY" \
+  --ctb-weight-power "$CTB_WEIGHT_POWER" \
+  --ctb-weight-eps "$CTB_WEIGHT_EPS" \
+  --ctb-min-samples-leaf "$CTB_MIN_SAMPLES_LEAF" \
   --save-pointwise \
   --outdir "$OUTDIR"
 

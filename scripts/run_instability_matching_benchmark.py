@@ -42,15 +42,22 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--noise-type", choices=["homoscedastic", "heteroscedastic"], default="homoscedastic")
     parser.add_argument("--feature-dist", choices=["uniform", "gaussian"], default="uniform")
     parser.add_argument("--noise-scale", type=float, default=0.5)
+    parser.add_argument("--ctb-n-estimators", type=int, default=50)
+    parser.add_argument("--ctb-inner-bootstraps", type=int, default=8)
+    parser.add_argument("--ctb-eta", type=float, default=1.0)
+    parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
+    parser.add_argument("--ctb-weight-power", type=float, default=1.0)
+    parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
+    parser.add_argument("--ctb-min-samples-leaf", type=int, default=5)
     parser.add_argument("--save-pointwise", action="store_true", help="Save pointwise mean predictions for downstream geometry plots.")
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment1_instability"))
     return parser
 
 
-def _resolve_methods(task_type: str, requested_methods: List[str] | None) -> List[str]:
+def _resolve_methods(task_type: str, requested_methods: List[str] | None, spec_kwargs: Dict[str, object]) -> List[str]:
     if requested_methods is None:
         return default_methods_for_task(task_type)
-    available = make_default_learner_specs(random_state=0)
+    available = make_default_learner_specs(random_state=0, **spec_kwargs)
     task_methods = [name for name in requested_methods if name in available and available[name].task_type == task_type]
     if not task_methods:
         raise ValueError(f"No requested methods are compatible with task_type={task_type!r}")
@@ -149,21 +156,38 @@ def main() -> None:
         "noise_type": args.noise_type,
         "feature_dist": args.feature_dist,
         "noise_scale": args.noise_scale,
+        "ctb_n_estimators": args.ctb_n_estimators,
+        "ctb_inner_bootstraps": args.ctb_inner_bootstraps,
+        "ctb_eta": args.ctb_eta,
+        "ctb_instability_penalty": args.ctb_instability_penalty,
+        "ctb_weight_power": args.ctb_weight_power,
+        "ctb_weight_eps": args.ctb_weight_eps,
+        "ctb_min_samples_leaf": args.ctb_min_samples_leaf,
         "save_pointwise": bool(args.save_pointwise),
     }
     save_json(config, outdir / "run_config.json")
+
+    spec_kwargs: Dict[str, object] = {
+        "ctb_n_estimators": int(args.ctb_n_estimators),
+        "ctb_inner_bootstraps": int(args.ctb_inner_bootstraps),
+        "ctb_eta": float(args.ctb_eta),
+        "ctb_instability_penalty": float(args.ctb_instability_penalty),
+        "ctb_weight_power": float(args.ctb_weight_power),
+        "ctb_weight_eps": float(args.ctb_weight_eps),
+        "ctb_min_samples_leaf": int(args.ctb_min_samples_leaf),
+    }
 
     trial_rows: List[Dict[str, object]] = []
     pointwise_frames: List[pd.DataFrame] = []
     dataset_rows: List[Dict[str, object]] = []
 
     total_method_trials = sum(
-        len(_resolve_methods(task_type, args.methods)) * len(args.scenarios) * args.num_seeds for task_type in args.tasks
+        len(_resolve_methods(task_type, args.methods, spec_kwargs)) * len(args.scenarios) * args.num_seeds for task_type in args.tasks
     )
 
     with progress_bar(total=total_method_trials, desc="Experiment 1 benchmark", unit="model") as pbar:
         for task_type in args.tasks:
-            methods = _resolve_methods(task_type, args.methods)
+            methods = _resolve_methods(task_type, args.methods, spec_kwargs)
             for scenario in args.scenarios:
                 for rep in range(args.num_seeds):
                     bundle = generate_dataset_bundle(
@@ -204,6 +228,7 @@ def main() -> None:
                                 method,
                                 task_type=task_type,
                                 random_state=(args.base_seed + rep * 1000 + bootstrap_id),
+                                **spec_kwargs,
                             )
                             _force_single_thread(model)
                             model.fit(bundle.train.X[train_idx], bundle.train.y[train_idx])

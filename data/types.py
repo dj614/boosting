@@ -30,6 +30,24 @@ class HeteroscedasticRegressionDataset:
 
 
 @dataclass(frozen=True)
+class TabularRegressionSplit:
+    X: Array
+    y: Array
+    sample_id: Array
+    metadata: Dict[str, Array]
+
+
+@dataclass(frozen=True)
+class TabularRegressionDataset:
+    dataset_name: str
+    train: TabularRegressionSplit
+    valid: TabularRegressionSplit
+    test: TabularRegressionSplit
+    feature_names: List[str]
+    metadata: Dict[str, object]
+
+
+@dataclass(frozen=True)
 class GroupedPartialLinearSplit:
     X: Array
     D: Array

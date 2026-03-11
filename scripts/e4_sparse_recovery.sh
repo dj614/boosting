@@ -125,10 +125,16 @@ SUPPORT_STRATEGY="${SUPPORT_STRATEGY:-spaced}"
 SNR="${SNR:-4.0}"
 XGB_SUPPORT_K="${XGB_SUPPORT_K:-10}"
 TOP_FEATURES="${TOP_FEATURES:-25}"
+CTB_MAX_STEPS="${CTB_MAX_STEPS:-300}"
+CTB_INNER_BOOTSTRAPS="${CTB_INNER_BOOTSTRAPS:-8}"
+CTB_ETA="${CTB_ETA:-1.0}"
+CTB_INSTABILITY_PENALTY="${CTB_INSTABILITY_PENALTY:-0.0}"
+CTB_WEIGHT_POWER="${CTB_WEIGHT_POWER:-1.0}"
+CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
 
 run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --designs independent block_correlated strong_collinear \
-  --models l2boost bagged_componentwise lasso xgb_tree \
+  --models l2boost bagged_componentwise ctb_sparse lasso xgb_tree \
   --num-seeds "$NUM_SEEDS" \
   --base-seed "$BASE_SEED" \
   --n-train "$N_TRAIN" \
@@ -143,6 +149,12 @@ run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --support-strategy "$SUPPORT_STRATEGY" \
   --snr "$SNR" \
   --xgb-support-k "$XGB_SUPPORT_K" \
+  --ctb-max-steps "$CTB_MAX_STEPS" \
+  --ctb-inner-bootstraps "$CTB_INNER_BOOTSTRAPS" \
+  --ctb-eta "$CTB_ETA" \
+  --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY" \
+  --ctb-weight-power "$CTB_WEIGHT_POWER" \
+  --ctb-weight-eps "$CTB_WEIGHT_EPS" \
   --save-feature-tables \
   --outdir "$OUTDIR"
 

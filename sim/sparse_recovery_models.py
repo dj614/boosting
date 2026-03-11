@@ -51,6 +51,23 @@ class BaggedComponentwiseConfig:
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
 
+@dataclass(frozen=True)
+class CTBSparseConfig:
+    max_steps: int = 300
+    n_inner_bootstraps: int = 8
+    eta: float = 1.0
+    instability_penalty: float = 0.0
+    weight_power: float = 1.0
+    weight_eps: float = 1e-8
+    coef_tol: float = 1e-10
+    random_state: int = 0
+
+    @property
+    def model_name(self) -> str:
+        return "ctb_sparse"
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
 
 @dataclass(frozen=True)
 class LassoPathConfig:
@@ -356,6 +373,168 @@ class BaggedComponentwiseRegressorWrapper(SparseRegressionWrapperBase):
         tau = float(self.config.support_frequency_threshold if threshold is None else threshold)
         return np.flatnonzero(freq >= tau).astype(int)
 
+class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
+    def __init__(
+        self,
+        config: CTBSparseConfig,
+        selection_checkpoints: Optional[Sequence[int]] = None,
+        trajectory_checkpoints: Optional[Sequence[int]] = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.selection_checkpoints = _resolve_checkpoints(
+            selection_checkpoints,
+            max_checkpoint=config.max_steps,
+            default_points=min(25, config.max_steps),
+        )
+        self.trajectory_checkpoints = _resolve_checkpoints(
+            trajectory_checkpoints,
+            max_checkpoint=config.max_steps,
+            default_points=min(25, config.max_steps),
+        )
+        self.selected_step_: Optional[int] = None
+        self.coef_path_: Optional[Array] = None
+        self.alpha_path_: Optional[Array] = None
+        self.mean_instability_path_: Optional[Array] = None
+        self.consensus_coef_path_: Optional[Array] = None
+        self.selected_feature_matrix_: Optional[Array] = None
+        self.selection_frequency_path_: Optional[Array] = None
+        self.selection_frequency_: Optional[Array] = None
+        self.selected_coef_: Optional[Array] = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def fit(
+        self,
+        train_split: SparseRegressionSplit,
+        valid_split: SparseRegressionSplit,
+    ) -> "CTBSparseRegressorWrapper":
+        X_train_std, y_train_centered, stats = _prepare_train_arrays(train_split.X, train_split.y)
+        X_valid_std = _transform_features(valid_split.X, stats)
+        self.standardization_ = stats
+
+        n_train, p = X_train_std.shape
+        rng = np.random.default_rng(self.config.random_state)
+        coef = np.zeros(p, dtype=float)
+        pred = np.zeros(n_train, dtype=float)
+
+        coef_path = np.zeros((self.config.max_steps, p), dtype=float)
+        alpha_path = np.zeros(self.config.max_steps, dtype=float)
+        mean_instability_path = np.zeros(self.config.max_steps, dtype=float)
+        consensus_coef_path = np.zeros((self.config.max_steps, p), dtype=float)
+        selected_feature_matrix = np.zeros((self.config.max_steps, self.config.n_inner_bootstraps), dtype=int)
+        selection_frequency_path = np.zeros((self.config.max_steps, p), dtype=float)
+        cumulative_feature_counts = np.zeros(p, dtype=float)
+
+        for step in range(self.config.max_steps):
+            residual = y_train_centered - pred
+            q = _residual_sampling_weights(residual, self.config.weight_power, self.config.weight_eps)
+
+            bag_coef = np.zeros((self.config.n_inner_bootstraps, p), dtype=float)
+            bag_pred = np.zeros((self.config.n_inner_bootstraps, n_train), dtype=float)
+
+            for bag_idx in range(self.config.n_inner_bootstraps):
+                sample_idx = rng.choice(n_train, size=n_train, replace=True, p=q)
+                feature_idx, gamma = _fit_componentwise_bootstrap_learner(
+                    X_train_std[sample_idx],
+                    residual[sample_idx],
+                )
+                selected_feature_matrix[step, bag_idx] = int(feature_idx)
+                bag_coef[bag_idx, feature_idx] = float(gamma)
+                bag_pred[bag_idx] = float(gamma) * X_train_std[:, feature_idx]
+                cumulative_feature_counts[feature_idx] += 1.0
+
+            consensus_coef = np.mean(bag_coef, axis=0)
+            consensus_pred = np.mean(bag_pred, axis=0)
+            instability = np.mean((bag_pred - consensus_pred[None, :]) ** 2, axis=0)
+
+            numer = float(np.dot(residual, consensus_pred))
+            denom = float((1.0 / self.config.eta) * np.dot(consensus_pred, consensus_pred))
+            if self.config.instability_penalty > 0.0:
+                denom += float(2.0 * self.config.instability_penalty * np.sum(instability * (consensus_pred ** 2)))
+            alpha = 0.0 if denom <= 1e-12 else numer / denom
+
+            coef = coef + alpha * consensus_coef
+            pred = pred + alpha * consensus_pred
+
+            coef_path[step] = coef
+            alpha_path[step] = alpha
+            mean_instability_path[step] = float(np.mean(instability))
+            consensus_coef_path[step] = consensus_coef
+            selection_frequency_path[step] = cumulative_feature_counts / float((step + 1) * self.config.n_inner_bootstraps)
+
+        self.coef_path_ = coef_path
+        self.alpha_path_ = alpha_path
+        self.mean_instability_path_ = mean_instability_path
+        self.consensus_coef_path_ = consensus_coef_path
+        self.selected_feature_matrix_ = selected_feature_matrix
+        self.selection_frequency_path_ = selection_frequency_path
+
+        valid_pred_path = _predict_centered_from_coef_path(X_valid_std, coef_path)
+        rows: List[Dict[str, float]] = []
+        best_step = None
+        best_valid_mse = None
+        for step in self.selection_checkpoints:
+            pred_valid = valid_pred_path[step - 1] + stats.y_mean
+            mse = float(mean_squared_error(valid_split.y, pred_valid))
+            coef_step = coef_path[step - 1]
+            support_size = int(np.count_nonzero(np.abs(coef_step) > self.config.coef_tol))
+            rows.append(
+                {
+                    "checkpoint": int(step),
+                    "valid_mse": mse,
+                    "support_size": float(support_size),
+                    "alpha": float(alpha_path[step - 1]),
+                    "mean_instability": float(mean_instability_path[step - 1]),
+                }
+            )
+            if best_valid_mse is None or mse < best_valid_mse:
+                best_valid_mse = mse
+                best_step = int(step)
+
+        self.selection_trace_ = pd.DataFrame(rows)
+        self.selected_step_ = int(best_step)
+        self.selected_coef_ = coef_path[self.selected_step_ - 1].copy()
+        self.selection_frequency_ = selection_frequency_path[self.selected_step_ - 1].copy()
+        self.selected_support_ = np.flatnonzero(np.abs(self.selected_coef_) > self.config.coef_tol).astype(int)
+        return self
+
+    def coef_at_step(self, step: Optional[int] = None) -> Array:
+        if self.coef_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_step = int(step or self.selected_step_ or self.config.max_steps)
+        _validate_step(use_step, self.config.max_steps)
+        return self.coef_path_[use_step - 1].copy()
+
+    def predict(self, X: Array, step: Optional[int] = None) -> Array:
+        stats = _require_standardization(self.standardization_)
+        coef = self.coef_at_step(step=step)
+        X_std = _transform_features(X, stats)
+        return X_std @ coef + stats.y_mean
+
+    def predict_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        if self.coef_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        stats = _require_standardization(self.standardization_)
+        X_std = _transform_features(X, stats)
+        out: Dict[int, Array] = {}
+        for step in sorted({int(s) for s in checkpoints}):
+            _validate_step(step, self.config.max_steps)
+            out[int(step)] = X_std @ self.coef_path_[step - 1] + stats.y_mean
+        return out
+
+    def support_at_step(self, step: Optional[int] = None) -> Array:
+        coef = self.coef_at_step(step=step)
+        return np.flatnonzero(np.abs(coef) > self.config.coef_tol).astype(int)
+
+    def selection_frequency_at_step(self, step: Optional[int] = None) -> Array:
+        if self.selection_frequency_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_step = int(step or self.selected_step_ or self.config.max_steps)
+        _validate_step(use_step, self.config.max_steps)
+        return self.selection_frequency_path_[use_step - 1].copy()
 
 class LassoPathRegressorWrapper(SparseRegressionWrapperBase):
     def __init__(self, config: LassoPathConfig) -> None:
@@ -549,6 +728,13 @@ def build_experiment4_model(
             config=config,
             selection_checkpoints=selection_checkpoints,
         )
+    if name == "ctb_sparse":
+        config = CTBSparseConfig(random_state=random_state, **kwargs)
+        return CTBSparseRegressorWrapper(
+            config=config,
+            selection_checkpoints=selection_checkpoints,
+            trajectory_checkpoints=trajectory_checkpoints,
+        )
     if name == "lasso":
         config = LassoPathConfig(random_state=random_state, **kwargs)
         return LassoPathRegressorWrapper(config=config)
@@ -570,6 +756,15 @@ def default_experiment4_model_grid(random_state: int = 0) -> Dict[str, Dict[str,
             "base_max_steps": 100,
             "learning_rate": 0.1,
             "support_frequency_threshold": 0.5,
+            "random_state": random_state,
+        },
+        "ctb_sparse": {
+            "max_steps": 300,
+            "n_inner_bootstraps": 8,
+            "eta": 1.0,
+            "instability_penalty": 0.0,
+            "weight_power": 1.0,
+            "weight_eps": 1e-8,
             "random_state": random_state,
         },
         "lasso": {
@@ -656,6 +851,26 @@ def _compute_entry_step(selected_feature_path: Array, p: int) -> Array:
             entry[feature_idx] = float(step)
     return entry
 
+def _fit_componentwise_bootstrap_learner(X: Array, y_centered: Array) -> Tuple[int, float]:
+    denom = np.sum(X * X, axis=0)
+    denom = np.where(denom < 1e-12, 1.0, denom)
+    numer = X.T @ y_centered
+    improvement = (numer ** 2) / denom
+    best_feature = int(np.argmax(improvement))
+    gamma = float(numer[best_feature] / denom[best_feature])
+    return best_feature, gamma
+
+
+def _residual_sampling_weights(residual: Array, weight_power: float, weight_eps: float) -> Array:
+    if weight_eps <= 0.0:
+        raise ValueError("weight_eps must be positive")
+    if weight_power < 0.0:
+        raise ValueError("weight_power must be non-negative")
+    raw = (np.abs(residual) + float(weight_eps)) ** float(weight_power)
+    total = float(np.sum(raw))
+    if not np.isfinite(total) or total <= 0.0:
+        return np.full(residual.shape[0], 1.0 / float(residual.shape[0]), dtype=float)
+    return raw / total
 
 def _resolve_checkpoints(
     checkpoints: Optional[Sequence[int]],

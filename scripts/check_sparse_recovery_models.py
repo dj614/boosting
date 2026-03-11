@@ -10,6 +10,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import importlib.util
+
+alias_src = ROOT / "sim" / "group_risk_redistribution_analysis.py"
+if alias_src.exists() and "sim.experiment1_step3_analysis" not in sys.modules:
+    spec = importlib.util.spec_from_file_location("sim.experiment1_step3_analysis", alias_src)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
 import numpy as np
 
 from sim.sparse_recovery_data import generate_sparse_regression_dataset
@@ -30,8 +40,8 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["l2boost", "bagged_componentwise", "lasso"],
-        choices=["l2boost", "bagged_componentwise", "lasso", "xgb_tree"],
+        default=["l2boost", "bagged_componentwise", "ctb_sparse", "lasso"],
+        choices=["l2boost", "bagged_componentwise", "ctb_sparse", "lasso", "xgb_tree"],
     )
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment4_model_check"))
     return parser

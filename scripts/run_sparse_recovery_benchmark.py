@@ -11,6 +11,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import importlib.util
+
+alias_src = ROOT / "sim" / "group_risk_redistribution_analysis.py"
+if alias_src.exists() and "sim.experiment1_step3_analysis" not in sys.modules:
+    spec = importlib.util.spec_from_file_location("sim.experiment1_step3_analysis", alias_src)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
 import numpy as np
 import pandas as pd
 from progress_utils import progress_bar
@@ -30,8 +40,8 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=["l2boost", "bagged_componentwise", "lasso", "xgb_tree"],
-        default=["l2boost", "bagged_componentwise", "lasso", "xgb_tree"],
+        choices=["l2boost", "bagged_componentwise", "ctb_sparse", "lasso", "xgb_tree"],
+        default=["l2boost", "bagged_componentwise", "ctb_sparse", "lasso", "xgb_tree"],
     )
     parser.add_argument("--num-seeds", type=int, default=10)
     parser.add_argument("--base-seed", type=int, default=0)
@@ -47,6 +57,12 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--support-strategy", choices=["first", "spaced", "random"], default="spaced")
     parser.add_argument("--snr", type=float, default=4.0)
     parser.add_argument("--xgb-support-k", type=int, default=None, help="If set, use top-k feature importance as XGBoost support estimate.")
+    parser.add_argument("--ctb-max-steps", type=int, default=300)
+    parser.add_argument("--ctb-inner-bootstraps", type=int, default=8)
+    parser.add_argument("--ctb-eta", type=float, default=1.0)
+    parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
+    parser.add_argument("--ctb-weight-power", type=float, default=1.0)
+    parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
     parser.add_argument("--save-feature-tables", action="store_true")
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment4_sparse_recovery"))
     return parser
@@ -79,7 +95,7 @@ def _feature_frame_for_model(model_name: str, model: object, dataset, support_ha
         "true_beta": dataset.beta_true,
     }
 
-    if model_name == "bagged_componentwise" and getattr(model, "selection_frequency_", None) is not None:
+    if model_name in {"bagged_componentwise", "ctb_sparse"} and getattr(model, "selection_frequency_", None) is not None:
         frame = make_feature_support_frame(
             selection_frequency=np.asarray(model.selection_frequency_, dtype=float),
             support_true=dataset.support_true,
@@ -162,6 +178,12 @@ def main() -> None:
         "support_strategy": args.support_strategy,
         "snr": args.snr,
         "xgb_support_k": args.xgb_support_k,
+        "ctb_max_steps": args.ctb_max_steps,
+        "ctb_inner_bootstraps": args.ctb_inner_bootstraps,
+        "ctb_eta": args.ctb_eta,
+        "ctb_instability_penalty": args.ctb_instability_penalty,
+        "ctb_weight_power": args.ctb_weight_power,
+        "ctb_weight_eps": args.ctb_weight_eps,
         "save_feature_tables": bool(args.save_feature_tables),
     }
     _save_json(config, outdir / "run_config.json")
@@ -196,7 +218,17 @@ def main() -> None:
 
                 for model_name in args.models:
                     pbar.set_postfix(design=design, rep=rep, model=model_name)
-                    model = build_experiment4_model(model_name=model_name, random_state=seed)
+                    model_kwargs = {"random_state": seed}
+                    if model_name == "ctb_sparse":
+                        model_kwargs.update(
+                            max_steps=args.ctb_max_steps,
+                            n_inner_bootstraps=args.ctb_inner_bootstraps,
+                            eta=args.ctb_eta,
+                            instability_penalty=args.ctb_instability_penalty,
+                            weight_power=args.ctb_weight_power,
+                            weight_eps=args.ctb_weight_eps,
+                        )
+                    model = build_experiment4_model(model_name=model_name, **model_kwargs)
                     model.fit(dataset.train, dataset.valid)
                     support_hat, support_mode = _resolve_support_hat(model_name, model, dataset, args.xgb_support_k)
                     trial_rows.append(

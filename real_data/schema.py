@@ -11,6 +11,7 @@ class RealDatasetSpec:
     task_type: str
     source_type: str
     target_column: str
+    positive_aliases: Tuple[str, ...] = field(default_factory=tuple)
     positive_label: str
     openml_name: Optional[str] = None
     openml_version: Optional[int] = None
@@ -28,8 +29,14 @@ class RawDatasetPaths:
     raw_archive_path: Optional[Path]
     extracted_dir: Path
 
+@dataclass(frozen=True)
+class ProcessedDatasetPaths:
+    dataset_root: Path
+    cleaned_table_path: Path
+    manifest_path: Path
 
 DEFAULT_REAL_DATA_ROOT = Path("data") / "raw" / "real"
+DEFAULT_REAL_PROCESSED_ROOT = Path("data") / "processed" / "real"
 
 
 def dataset_raw_paths(dataset_name: str, root: Path | str = DEFAULT_REAL_DATA_ROOT) -> RawDatasetPaths:
@@ -43,6 +50,18 @@ def dataset_raw_paths(dataset_name: str, root: Path | str = DEFAULT_REAL_DATA_RO
         extracted_dir=dataset_root / "extracted",
     )
 
+
+def dataset_processed_paths(
+    dataset_name: str,
+    root: Path | str = DEFAULT_REAL_PROCESSED_ROOT,
+) -> ProcessedDatasetPaths:
+    base_root = Path(root)
+    dataset_root = base_root / dataset_name
+    return ProcessedDatasetPaths(
+        dataset_root=dataset_root,
+        cleaned_table_path=dataset_root / "cleaned_table.csv",
+        manifest_path=dataset_root / "manifest.json",
+    )
 
 def ensure_parent_dirs(paths: Sequence[Path]) -> None:
     for path in paths:

@@ -126,11 +126,17 @@ SNR="${SNR:-4.0}"
 XGB_SUPPORT_K="${XGB_SUPPORT_K:-10}"
 TOP_FEATURES="${TOP_FEATURES:-25}"
 CTB_MAX_STEPS="${CTB_MAX_STEPS:-300}"
-CTB_INNER_BOOTSTRAPS="${CTB_INNER_BOOTSTRAPS:-8}"
-CTB_ETA="${CTB_ETA:-1.0}"
-CTB_INSTABILITY_PENALTY="${CTB_INSTABILITY_PENALTY:-0.0}"
-CTB_WEIGHT_POWER="${CTB_WEIGHT_POWER:-1.0}"
-CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
+CTB_INNER_BOOTSTRAPS="${CTB_INNER_BOOTSTRAPS:-16}"
+CTB_ETA="${CTB_ETA:-0.1}"
+CTB_RESIDUAL_WEIGHT_POWER="${CTB_RESIDUAL_WEIGHT_POWER:-1.0}"
+CTB_RESIDUAL_WEIGHT_EPS="${CTB_RESIDUAL_WEIGHT_EPS:-1e-8}"
+CTB_CONSENSUS_FREQUENCY_POWER="${CTB_CONSENSUS_FREQUENCY_POWER:-2.0}"
+CTB_CONSENSUS_SIGN_POWER="${CTB_CONSENSUS_SIGN_POWER:-1.0}"
+CTB_INSTABILITY_LAMBDA="${CTB_INSTABILITY_LAMBDA:-1.0}"
+CTB_INSTABILITY_POWER="${CTB_INSTABILITY_POWER:-1.0}"
+CTB_MIN_CONSENSUS_FREQUENCY="${CTB_MIN_CONSENSUS_FREQUENCY:-0.25}"
+CTB_MIN_SIGN_CONSISTENCY="${CTB_MIN_SIGN_CONSISTENCY:-0.75}"
+CTB_SUPPORT_FREQUENCY_THRESHOLD="${CTB_SUPPORT_FREQUENCY_THRESHOLD:-0.05}"
 
 run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --designs independent block_correlated strong_collinear \
@@ -152,9 +158,15 @@ run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --ctb-max-steps "$CTB_MAX_STEPS" \
   --ctb-inner-bootstraps "$CTB_INNER_BOOTSTRAPS" \
   --ctb-eta "$CTB_ETA" \
-  --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY" \
-  --ctb-weight-power "$CTB_WEIGHT_POWER" \
-  --ctb-weight-eps "$CTB_WEIGHT_EPS" \
+  --ctb-residual-weight-power "$CTB_RESIDUAL_WEIGHT_POWER" \
+  --ctb-residual-weight-eps "$CTB_RESIDUAL_WEIGHT_EPS" \
+  --ctb-consensus-frequency-power "$CTB_CONSENSUS_FREQUENCY_POWER" \
+  --ctb-consensus-sign-power "$CTB_CONSENSUS_SIGN_POWER" \
+  --ctb-instability-lambda "$CTB_INSTABILITY_LAMBDA" \
+  --ctb-instability-power "$CTB_INSTABILITY_POWER" \
+  --ctb-min-consensus-frequency "$CTB_MIN_CONSENSUS_FREQUENCY" \
+  --ctb-min-sign-consistency "$CTB_MIN_SIGN_CONSISTENCY" \
+  --ctb-support-frequency-threshold "$CTB_SUPPORT_FREQUENCY_THRESHOLD" \
   --save-feature-tables \
   --outdir "$OUTDIR"
 

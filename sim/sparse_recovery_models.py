@@ -56,10 +56,15 @@ class CTBSparseConfig:
     max_steps: int = 300
     n_inner_bootstraps: int = 8
     eta: float = 1.0
-    instability_penalty: float = 0.0
-    weight_power: float = 1.0
-    weight_eps: float = 1e-8
-    support_frequency_threshold: float = 0.5
+    residual_weight_power: float = 1.0
+    residual_weight_eps: float = 1e-8
+    consensus_frequency_power: float = 2.0
+    consensus_sign_power: float = 1.0
+    instability_lambda: float = 1.0
+    instability_power: float = 1.0
+    min_consensus_frequency: float = 0.25
+    min_sign_consistency: float = 0.75
+    support_frequency_threshold: float = 0.05
     coef_tol: float = 1e-10
     random_state: int = 0
 
@@ -395,9 +400,11 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         )
         self.selected_step_: Optional[int] = None
         self.coef_path_: Optional[Array] = None
-        self.alpha_path_: Optional[Array] = None
+        self.step_update_l1_path_: Optional[Array] = None
         self.mean_instability_path_: Optional[Array] = None
-        self.consensus_coef_path_: Optional[Array] = None
+        self.consensus_weight_path_: Optional[Array] = None
+        self.conditional_mean_gamma_path_: Optional[Array] = None
+        self.sign_consistency_path_: Optional[Array] = None
         self.selected_feature_matrix_: Optional[Array] = None
         self.selection_frequency_path_: Optional[Array] = None
         self.selection_frequency_: Optional[Array] = None
@@ -422,54 +429,87 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         pred = np.zeros(n_train, dtype=float)
 
         coef_path = np.zeros((self.config.max_steps, p), dtype=float)
-        alpha_path = np.zeros(self.config.max_steps, dtype=float)
+        step_update_l1_path = np.zeros(self.config.max_steps, dtype=float)
         mean_instability_path = np.zeros(self.config.max_steps, dtype=float)
-        consensus_coef_path = np.zeros((self.config.max_steps, p), dtype=float)
+        consensus_weight_path = np.zeros((self.config.max_steps, p), dtype=float)
+        conditional_mean_gamma_path = np.zeros((self.config.max_steps, p), dtype=float)
+        sign_consistency_path = np.zeros((self.config.max_steps, p), dtype=float)
         selected_feature_matrix = np.zeros((self.config.max_steps, self.config.n_inner_bootstraps), dtype=int)
         selection_frequency_path = np.zeros((self.config.max_steps, p), dtype=float)
         cumulative_feature_counts = np.zeros(p, dtype=float)
+        eps = 1e-12
 
         for step in range(self.config.max_steps):
             residual = y_train_centered - pred
-            q = _residual_sampling_weights(residual, self.config.weight_power, self.config.weight_eps)
+            sample_weight = _residual_sampling_weights(
+                residual,
+                self.config.residual_weight_power,
+                self.config.residual_weight_eps,
+            )
 
-            bag_coef = np.zeros((self.config.n_inner_bootstraps, p), dtype=float)
-            bag_pred = np.zeros((self.config.n_inner_bootstraps, n_train), dtype=float)
+            bootstrap_features = np.zeros(self.config.n_inner_bootstraps, dtype=int)
+            bootstrap_gammas = np.zeros(self.config.n_inner_bootstraps, dtype=float)
 
             for bag_idx in range(self.config.n_inner_bootstraps):
-                sample_idx = rng.choice(n_train, size=n_train, replace=True, p=q)
+                sample_idx = rng.choice(n_train, size=n_train, replace=True, p=sample_weight)
                 feature_idx, gamma = _fit_componentwise_bootstrap_learner(
                     X_train_std[sample_idx],
                     residual[sample_idx],
                 )
+                bootstrap_features[bag_idx] = int(feature_idx)
+                bootstrap_gammas[bag_idx] = float(gamma)
                 selected_feature_matrix[step, bag_idx] = int(feature_idx)
-                bag_coef[bag_idx, feature_idx] = float(gamma)
-                bag_pred[bag_idx] = float(gamma) * X_train_std[:, feature_idx]
                 cumulative_feature_counts[feature_idx] += 1.0
 
-            consensus_coef = np.mean(bag_coef, axis=0)
-            consensus_pred = np.mean(bag_pred, axis=0)
-            instability = np.mean((bag_pred - consensus_pred[None, :]) ** 2, axis=0)
+            selection_frequency_step = np.zeros(p, dtype=float)
+            sign_consistency_step = np.zeros(p, dtype=float)
+            conditional_mean_gamma_step = np.zeros(p, dtype=float)
+            gamma_variance_step = np.zeros(p, dtype=float)
 
-            numer = float(np.dot(residual, consensus_pred))
-            denom = float((1.0 / self.config.eta) * np.dot(consensus_pred, consensus_pred))
-            if self.config.instability_penalty > 0.0:
-                denom += float(2.0 * self.config.instability_penalty * np.sum(instability * (consensus_pred ** 2)))
-            alpha = 0.0 if denom <= 1e-12 else numer / denom
+            unique_features, counts = np.unique(bootstrap_features, return_counts=True)
+            for feature_idx, count in zip(unique_features.astype(int), counts.astype(int)):
+                mask = bootstrap_features == feature_idx
+                gamma_j = bootstrap_gammas[mask]
+                count_j = float(count)
+                selection_frequency_step[feature_idx] = count_j / float(self.config.n_inner_bootstraps)
+                conditional_mean_gamma_step[feature_idx] = float(np.mean(gamma_j))
+                sign_consistency_step[feature_idx] = float(np.abs(np.mean(np.sign(gamma_j))))
+                gamma_variance_step[feature_idx] = float(np.mean((gamma_j - conditional_mean_gamma_step[feature_idx]) ** 2))
 
-            coef = coef + alpha * consensus_coef
-            pred = pred + alpha * consensus_pred
+            consensus_weight = np.zeros(p, dtype=float)
+            eligible = (
+                (selection_frequency_step >= self.config.min_consensus_frequency)
+                & (sign_consistency_step >= self.config.min_sign_consistency)
+            )
+            if np.any(eligible):
+                frequency_factor = np.power(selection_frequency_step[eligible], self.config.consensus_frequency_power)
+                sign_factor = np.power(sign_consistency_step[eligible], self.config.consensus_sign_power)
+                instability_factor = np.power(
+                    1.0 + self.config.instability_lambda * gamma_variance_step[eligible],
+                    self.config.instability_power,
+                )
+                consensus_weight[eligible] = frequency_factor * sign_factor / np.maximum(instability_factor, eps)
+
+            delta_coef = self.config.eta * consensus_weight * conditional_mean_gamma_step
+            delta_pred = X_train_std @ delta_coef
+
+            coef = coef + delta_coef
+            pred = pred + delta_pred
 
             coef_path[step] = coef
-            alpha_path[step] = alpha
-            mean_instability_path[step] = float(np.mean(instability))
-            consensus_coef_path[step] = consensus_coef
+            step_update_l1_path[step] = float(np.sum(np.abs(delta_coef)))
+            mean_instability_path[step] = float(np.mean(gamma_variance_step[unique_features])) if unique_features.size else 0.0
+            consensus_weight_path[step] = consensus_weight
+            conditional_mean_gamma_path[step] = conditional_mean_gamma_step
+            sign_consistency_path[step] = sign_consistency_step
             selection_frequency_path[step] = cumulative_feature_counts / float((step + 1) * self.config.n_inner_bootstraps)
 
         self.coef_path_ = coef_path
-        self.alpha_path_ = alpha_path
+        self.step_update_l1_path_ = step_update_l1_path
         self.mean_instability_path_ = mean_instability_path
-        self.consensus_coef_path_ = consensus_coef_path
+        self.consensus_weight_path_ = consensus_weight_path
+        self.conditional_mean_gamma_path_ = conditional_mean_gamma_path
+        self.sign_consistency_path_ = sign_consistency_path
         self.selected_feature_matrix_ = selected_feature_matrix
         self.selection_frequency_path_ = selection_frequency_path
 
@@ -489,8 +529,10 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
                     "checkpoint": int(step),
                     "valid_mse": mse,
                     "support_size": float(support_size),
-                    "alpha": float(alpha_path[step - 1]),
+                    "step_update_l1": float(step_update_l1_path[step - 1]),
                     "mean_instability": float(mean_instability_path[step - 1]),
+                    "mean_consensus_weight": float(np.mean(consensus_weight_path[step - 1])),
+                    "mean_sign_consistency": float(np.mean(sign_consistency_path[step - 1])),
                 }
             )
             if best_valid_mse is None or mse < best_valid_mse:
@@ -773,10 +815,15 @@ def default_experiment4_model_grid(random_state: int = 0) -> Dict[str, Dict[str,
             "max_steps": 300,
             "n_inner_bootstraps": 8,
             "eta": 1.0,
-            "instability_penalty": 0.0,
-            "weight_power": 1.0,
-            "weight_eps": 1e-8,
-            "support_frequency_threshold": 0.5,
+            "residual_weight_power": 1.0,
+            "residual_weight_eps": 1e-8,
+            "consensus_frequency_power": 2.0,
+            "consensus_sign_power": 1.0,
+            "instability_lambda": 1.0,
+            "instability_power": 1.0,
+            "min_consensus_frequency": 0.25,
+            "min_sign_consistency": 0.75,
+            "support_frequency_threshold": 0.05,
             "random_state": random_state,
         },
         "lasso": {

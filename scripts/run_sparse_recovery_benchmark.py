@@ -60,9 +60,15 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-max-steps", type=int, default=300)
     parser.add_argument("--ctb-inner-bootstraps", type=int, default=8)
     parser.add_argument("--ctb-eta", type=float, default=1.0)
-    parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
-    parser.add_argument("--ctb-weight-power", type=float, default=1.0)
-    parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
+    parser.add_argument("--ctb-residual-weight-power", type=float, default=1.0)
+    parser.add_argument("--ctb-residual-weight-eps", type=float, default=1e-8)
+    parser.add_argument("--ctb-consensus-frequency-power", type=float, default=2.0)
+    parser.add_argument("--ctb-consensus-sign-power", type=float, default=1.0)
+    parser.add_argument("--ctb-instability-lambda", type=float, default=1.0)
+    parser.add_argument("--ctb-instability-power", type=float, default=1.0)
+    parser.add_argument("--ctb-min-consensus-frequency", type=float, default=0.25)
+    parser.add_argument("--ctb-min-sign-consistency", type=float, default=0.75)
+    parser.add_argument("--ctb-support-frequency-threshold", type=float, default=0.05)
     parser.add_argument("--save-feature-tables", action="store_true")
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment4_sparse_recovery"))
     return parser
@@ -181,9 +187,15 @@ def main() -> None:
         "ctb_max_steps": args.ctb_max_steps,
         "ctb_inner_bootstraps": args.ctb_inner_bootstraps,
         "ctb_eta": args.ctb_eta,
-        "ctb_instability_penalty": args.ctb_instability_penalty,
-        "ctb_weight_power": args.ctb_weight_power,
-        "ctb_weight_eps": args.ctb_weight_eps,
+        "ctb_residual_weight_power": args.ctb_residual_weight_power,
+        "ctb_residual_weight_eps": args.ctb_residual_weight_eps,
+        "ctb_consensus_frequency_power": args.ctb_consensus_frequency_power,
+        "ctb_consensus_sign_power": args.ctb_consensus_sign_power,
+        "ctb_instability_lambda": args.ctb_instability_lambda,
+        "ctb_instability_power": args.ctb_instability_power,
+        "ctb_min_consensus_frequency": args.ctb_min_consensus_frequency,
+        "ctb_min_sign_consistency": args.ctb_min_sign_consistency,
+        "ctb_support_frequency_threshold": args.ctb_support_frequency_threshold,
         "save_feature_tables": bool(args.save_feature_tables),
     }
     _save_json(config, outdir / "run_config.json")
@@ -224,9 +236,15 @@ def main() -> None:
                             max_steps=args.ctb_max_steps,
                             n_inner_bootstraps=args.ctb_inner_bootstraps,
                             eta=args.ctb_eta,
-                            instability_penalty=args.ctb_instability_penalty,
-                            weight_power=args.ctb_weight_power,
-                            weight_eps=args.ctb_weight_eps,
+                            residual_weight_power=args.ctb_residual_weight_power,
+                            residual_weight_eps=args.ctb_residual_weight_eps,
+                            consensus_frequency_power=args.ctb_consensus_frequency_power,
+                            consensus_sign_power=args.ctb_consensus_sign_power,
+                            instability_lambda=args.ctb_instability_lambda,
+                            instability_power=args.ctb_instability_power,
+                            min_consensus_frequency=args.ctb_min_consensus_frequency,
+                            min_sign_consistency=args.ctb_min_sign_consistency,
+                            support_frequency_threshold=args.ctb_support_frequency_threshold,
                         )
                     model = build_experiment4_model(model_name=model_name, **model_kwargs)
                     model.fit(dataset.train, dataset.valid)

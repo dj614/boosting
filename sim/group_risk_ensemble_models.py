@@ -13,6 +13,7 @@ from sklearn.ensemble import (
 from sklearn.metrics import log_loss
 from sklearn.tree import DecisionTreeClassifier
 
+from .ctb_core import ConsensusTransportBoosting
 from .grouped_classification_data import BinaryClassificationSplit
 
 try:  # pragma: no cover
@@ -33,6 +34,11 @@ class EnsembleModelConfig:
     learning_rate: float = 0.05
     subsample: float = 1.0
     colsample_bytree: float = 1.0
+    inner_bootstraps: int = 8
+    eta: float = 1.0
+    instability_penalty: float = 0.0
+    weight_power: float = 1.0
+    weight_eps: float = 1e-8
     random_state: int = 0
 
     @property
@@ -200,6 +206,29 @@ class XGBoostBinaryWrapper(BinaryEnsembleWrapper):
         return out
 
 
+class CTBBinaryWrapper(BinaryEnsembleWrapper):
+    def _build_estimator(self):
+        return ConsensusTransportBoosting(
+            task_type="classification",
+            n_estimators=self.config.n_estimators,
+            n_inner_bootstraps=self.config.inner_bootstraps,
+            eta=self.config.eta,
+            instability_penalty=self.config.instability_penalty,
+            weight_power=self.config.weight_power,
+            weight_eps=self.config.weight_eps,
+            max_depth=self.config.max_depth,
+            min_samples_leaf=self.config.min_samples_leaf,
+            random_state=self.config.random_state,
+        )
+
+    def _predict_proba_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        requested = sorted({int(x) for x in checkpoints})
+        staged = self.model.predict_proba_staged(X, checkpoints=requested)
+        out: Dict[int, Array] = {}
+        for checkpoint, proba in staged.items():
+            out[int(checkpoint)] = np.asarray(proba[:, 1], dtype=float)
+        _validate_checkpoint_outputs(requested, out, self.config.n_estimators)
+        return out
 
 def _validate_checkpoint_outputs(requested: Sequence[int], out: Mapping[int, Array], max_checkpoint: int) -> None:
     missing = [int(x) for x in requested if int(x) not in out]
@@ -246,6 +275,8 @@ def build_binary_ensemble_wrapper(
         return GradientBoostingBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
     if family == "xgb":
         return XGBoostBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
+    if family == "ctb":
+        return CTBBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
     raise ValueError(f"Unsupported family={family!r}")
 
 
@@ -258,6 +289,11 @@ def expand_model_grid(
     min_samples_leaf: int,
     subsample: float,
     colsample_bytree: float,
+    inner_bootstraps: int,
+    eta: float,
+    instability_penalty: float,
+    weight_power: float,
+    weight_eps: float,
     random_state: int,
 ) -> List[EnsembleModelConfig]:
     grid: List[EnsembleModelConfig] = []
@@ -272,6 +308,11 @@ def expand_model_grid(
                     learning_rate=float(learning_rate),
                     subsample=float(subsample),
                     colsample_bytree=float(colsample_bytree),
+                    inner_bootstraps=int(inner_bootstraps),
+                    eta=float(eta),
+                    instability_penalty=float(instability_penalty),
+                    weight_power=float(weight_power),
+                    weight_eps=float(weight_eps),
                     random_state=int(random_state),
                 )
             )

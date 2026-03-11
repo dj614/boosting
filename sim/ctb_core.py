@@ -126,18 +126,41 @@ class ConsensusTransportBoosting(BaseEstimator):
         self.train_score_ = train_score
         return self
 
-    def decision_function(self, X: np.ndarray) -> np.ndarray:
+    def _round_consensus_prediction(self, X: np.ndarray, round_learners: list[DecisionTreeRegressor]) -> np.ndarray:
+        return np.mean(
+            [np.asarray(learner.predict(X), dtype=float).reshape(-1) for learner in round_learners],
+            axis=0,
+        )
+
+    def decision_function_staged(self, X: np.ndarray, checkpoints: list[int] | np.ndarray | None = None) -> dict[int, np.ndarray]:
         if not hasattr(self, "learners_"):
             raise ValueError("Model is not fitted")
         X = np.asarray(X, dtype=float)
-        score = np.zeros(X.shape[0], dtype=float)
-        for alpha, round_learners in zip(self.alphas_, self.learners_):
-            round_pred = np.mean(
-                [np.asarray(learner.predict(X), dtype=float).reshape(-1) for learner in round_learners],
-                axis=0,
+        if checkpoints is None:
+            requested = list(range(1, len(self.learners_) + 1))
+        else:
+            requested = sorted({int(x) for x in checkpoints if int(x) > 0})
+        if not requested:
+            return {}
+        max_requested = max(requested)
+        if max_requested > len(self.learners_):
+            raise ValueError(
+                f"Requested checkpoint {max_requested}, but model only has {len(self.learners_)} boosting rounds"
             )
-            score = score + float(alpha) * round_pred
-        return score
+        out: dict[int, np.ndarray] = {}
+        requested_set = set(requested)
+        score = np.zeros(X.shape[0], dtype=float)
+        for idx, (alpha, round_learners) in enumerate(zip(self.alphas_, self.learners_), start=1):
+            score = score + float(alpha) * self._round_consensus_prediction(X, round_learners)
+            if idx in requested_set:
+                out[idx] = score.copy()
+            if len(out) == len(requested):
+                break
+        return out
+
+    def decision_function(self, X: np.ndarray) -> np.ndarray:
+        staged = self.decision_function_staged(X, checkpoints=[len(self.learners_)])
+        return staged[len(self.learners_)]
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         score = self.decision_function(X)
@@ -145,8 +168,18 @@ class ConsensusTransportBoosting(BaseEstimator):
             return (self._sigmoid(score) >= 0.5).astype(float)
         return score
 
+    def predict_proba_staged(self, X: np.ndarray, checkpoints: list[int] | np.ndarray | None = None) -> dict[int, np.ndarray]:
+        if self.task_type != "classification":
+            raise ValueError("predict_proba_staged is only available for classification models")
+        staged_scores = self.decision_function_staged(X, checkpoints=checkpoints)
+        out: dict[int, np.ndarray] = {}
+        for checkpoint, score in staged_scores.items():
+            proba_one = self._sigmoid(score)
+            out[int(checkpoint)] = np.column_stack([1.0 - proba_one, proba_one])
+        return out
+
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         if self.task_type != "classification":
             raise ValueError("predict_proba is only available for classification models")
-        proba_one = self._sigmoid(self.decision_function(X))
-        return np.column_stack([1.0 - proba_one, proba_one])
+        staged = self.predict_proba_staged(X, checkpoints=[len(self.learners_)])
+        return staged[len(self.learners_)]

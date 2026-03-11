@@ -124,6 +124,11 @@ SUBSAMPLE="${SUBSAMPLE:-1.0}"
 COLSAMPLE_BYTREE="${COLSAMPLE_BYTREE:-0.9}"
 TRAJECTORY_EVERY="${TRAJECTORY_EVERY:-10}"
 TRAJ_SAMPLES_PER_GROUP="${TRAJ_SAMPLES_PER_GROUP:-8}"
+CTB_INNER_BOOTSTRAPS="${CTB_INNER_BOOTSTRAPS:-8}"
+CTB_ETA="${CTB_ETA:-1.0}"
+CTB_INSTABILITY_PENALTY="${CTB_INSTABILITY_PENALTY:-0.0}"
+CTB_WEIGHT_POWER="${CTB_WEIGHT_POWER:-1.0}"
+CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
 
 run_repo_script scripts/run_group_risk_trajectory_benchmark.py \
   --dataset "$DATASET" \
@@ -134,7 +139,7 @@ run_repo_script scripts/run_group_risk_trajectory_benchmark.py \
   --test-size "$TEST_SIZE" \
   --seed-start "$SEED_START" \
   --num-seeds "$NUM_SEEDS" \
-  --families bagging rf gbdt xgb \
+  --families bagging rf gbdt xgb ctb \
   --max-depths 1 3 5 \
   --ensemble-sizes 20 50 100 300 \
   --trajectory-every "$TRAJECTORY_EVERY" \
@@ -142,6 +147,11 @@ run_repo_script scripts/run_group_risk_trajectory_benchmark.py \
   --min-samples-leaf "$MIN_SAMPLES_LEAF" \
   --subsample "$SUBSAMPLE" \
   --colsample-bytree "$COLSAMPLE_BYTREE" \
+  --ctb-inner-bootstraps "$CTB_INNER_BOOTSTRAPS" \
+  --ctb-eta "$CTB_ETA" \
+  --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY" \
+  --ctb-weight-power "$CTB_WEIGHT_POWER" \
+  --ctb-weight-eps "$CTB_WEIGHT_EPS" \
   --prediction-splits valid test \
   --trajectory-splits valid test \
   --trajectory-sample-count-per-group "$TRAJ_SAMPLES_PER_GROUP" \

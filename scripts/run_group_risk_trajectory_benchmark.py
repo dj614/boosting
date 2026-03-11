@@ -36,7 +36,7 @@ from sim.group_risk_ensemble_models import (  # noqa: E402
 )
 
 
-DEFAULT_FAMILIES = ["bagging", "rf", "gbdt", "xgb"]
+DEFAULT_FAMILIES = ["bagging", "rf", "gbdt", "xgb", "ctb"]
 
 
 
@@ -68,6 +68,11 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-samples-leaf", type=int, default=5)
     parser.add_argument("--subsample", type=float, default=1.0)
     parser.add_argument("--colsample-bytree", type=float, default=0.9)
+    parser.add_argument("--ctb-inner-bootstraps", type=int, default=8)
+    parser.add_argument("--ctb-eta", type=float, default=1.0)
+    parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
+    parser.add_argument("--ctb-weight-power", type=float, default=1.0)
+    parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
     parser.add_argument("--prediction-splits", nargs="*", default=["valid", "test"])
     parser.add_argument("--trajectory-splits", nargs="*", default=["valid", "test"])
     parser.add_argument(
@@ -307,6 +312,11 @@ def main() -> None:
         "min_samples_leaf": int(args.min_samples_leaf),
         "subsample": float(args.subsample),
         "colsample_bytree": float(args.colsample_bytree),
+        "ctb_inner_bootstraps": int(args.ctb_inner_bootstraps),
+        "ctb_eta": float(args.ctb_eta),
+        "ctb_instability_penalty": float(args.ctb_instability_penalty),
+        "ctb_weight_power": float(args.ctb_weight_power),
+        "ctb_weight_eps": float(args.ctb_weight_eps),
     }
     _write_json(outdir / "run_config.json", run_manifest)
 
@@ -322,6 +332,11 @@ def main() -> None:
             min_samples_leaf=args.min_samples_leaf,
             subsample=args.subsample,
             colsample_bytree=args.colsample_bytree,
+            inner_bootstraps=args.ctb_inner_bootstraps,
+            eta=args.ctb_eta,
+            instability_penalty=args.ctb_instability_penalty,
+            weight_power=args.ctb_weight_power,
+            weight_eps=args.ctb_weight_eps,
             random_state=args.seed_start,
         )
     )
@@ -341,6 +356,11 @@ def main() -> None:
                 min_samples_leaf=args.min_samples_leaf,
                 subsample=args.subsample,
                 colsample_bytree=args.colsample_bytree,
+                inner_bootstraps=args.ctb_inner_bootstraps,
+                eta=args.ctb_eta,
+                instability_penalty=args.ctb_instability_penalty,
+                weight_power=args.ctb_weight_power,
+                weight_eps=args.ctb_weight_eps,
                 random_state=seed,
             )
             for model_config in model_grid:

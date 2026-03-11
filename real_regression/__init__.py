@@ -1,3 +1,7 @@
+from .download import download_real_regression_dataset, download_real_regression_datasets
+from .loaders import load_real_regression_dataset
+from .preprocess import prepare_real_regression_dataset, prepare_real_regression_datasets
+from .splits import create_real_regression_split_manifest, create_real_regression_split_manifests
 from .catalog import (
     get_real_regression_dataset_spec,
     iter_real_regression_dataset_specs,
@@ -30,4 +34,11 @@ __all__ = [
     "get_real_regression_dataset_spec",
     "iter_real_regression_dataset_specs",
     "list_real_regression_dataset_names",
+    "download_real_regression_dataset",
+    "download_real_regression_datasets",
+    "prepare_real_regression_dataset",
+    "prepare_real_regression_datasets",
+    "create_real_regression_split_manifest",
+    "create_real_regression_split_manifests",
+    "load_real_regression_dataset",
 ]

@@ -30,6 +30,11 @@ from sim.grouped_classification_eval import (  # noqa: E402
     make_binary_prediction_frame,
     save_prediction_frame,
 )
+from real_data import load_real_binary_classification_dataset  # noqa: E402
+from real_data.schema import (  # noqa: E402
+    DEFAULT_REAL_PROCESSED_ROOT,
+    DEFAULT_REAL_SPLIT_ROOT,
+)
 from sim.group_risk_ensemble_models import (  # noqa: E402
     build_binary_ensemble_wrapper,
     expand_model_grid,
@@ -42,10 +47,20 @@ DEFAULT_FAMILIES = ["bagging", "rf", "gbdt", "xgb", "ctb"]
 
 def _make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run experiment 1 step-2 training loop with staged risk trajectories.")
-    parser.add_argument("--dataset", choices=["simulated", "adult"], default="simulated")
+    parser.add_argument("--dataset", choices=["simulated", "adult", "real"], default="simulated")
     parser.add_argument(
         "--group-definition",
-        choices=["sex", "age_bucket", "education_bucket", "sex_age", "difficulty"],
+        choices=[
+            "auto",
+            "sex",
+            "age_bucket",
+            "education_bucket",
+            "sex_age",
+            "difficulty",
+            "difficulty_group",
+            "pclass",
+            "sex_pclass",
+        ],
         default="sex_age",
         help="Only used for Adult. 'difficulty' means build adult sex_age groups first, then relabel with train-only margins.",
     )
@@ -54,6 +69,10 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--valid-size", type=float, default=0.20)
     parser.add_argument("--test-size", type=float, default=0.20)
     parser.add_argument("--seed-start", type=int, default=0)
+    parser.add_argument("--real-dataset-name", type=str, default="titanic")
+    parser.add_argument("--repeat-id", type=int, default=None)
+    parser.add_argument("--processed-root", type=Path, default=DEFAULT_REAL_PROCESSED_ROOT)
+    parser.add_argument("--split-root", type=Path, default=DEFAULT_REAL_SPLIT_ROOT)
     parser.add_argument("--num-seeds", type=int, default=10)
     parser.add_argument("--families", nargs="*", default=None)
     parser.add_argument("--max-depths", nargs="*", type=int, default=[1, 3, 5])
@@ -93,6 +112,19 @@ def _load_dataset(args: argparse.Namespace, seed: int) -> BinaryClassificationDa
             n_features=args.n_features,
             valid_size=args.valid_size,
             test_size=args.test_size,
+            random_state=seed,
+        )
+    
+    if args.dataset == "real":
+        requested_group_definition = args.group_definition
+        if requested_group_definition == "difficulty":
+            requested_group_definition = "difficulty_group"
+        return load_real_binary_classification_dataset(
+            dataset_name=args.real_dataset_name,
+            repeat_id=int(args.repeat_id) if args.repeat_id is not None else int(seed),
+            group_definition=requested_group_definition,
+            processed_root=args.processed_root,
+            split_root=args.split_root,
             random_state=seed,
         )
 
@@ -300,6 +332,10 @@ def main() -> None:
     run_manifest = {
         "dataset": args.dataset,
         "group_definition": args.group_definition,
+        "real_dataset_name": args.real_dataset_name,
+        "repeat_id": args.repeat_id,
+        "processed_root": str(args.processed_root),
+        "split_root": str(args.split_root),
         "seed_start": int(args.seed_start),
         "num_seeds": int(args.num_seeds),
         "families": families,
@@ -341,8 +377,15 @@ def main() -> None:
         )
     )
 
+    if args.dataset == "real" and args.repeat_id is None:
+        seed_iterable = range(args.seed_start, args.seed_start + args.num_seeds)
+    elif args.dataset == "real":
+        seed_iterable = [int(args.repeat_id)]
+    else:
+        seed_iterable = range(args.seed_start, args.seed_start + args.num_seeds)
+
     with progress_bar(total=total_models, desc="Experiment 2 benchmark", unit="model") as pbar:
-        for seed in range(args.seed_start, args.seed_start + args.num_seeds):
+        for seed in seed_iterable:
             dataset = _load_dataset(args, seed=seed)
             seed_dir = outdir / dataset.dataset_name / f"seed_{seed:03d}"
             seed_dir.mkdir(parents=True, exist_ok=True)

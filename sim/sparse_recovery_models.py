@@ -401,6 +401,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         self.selected_step_: Optional[int] = None
         self.coef_path_: Optional[Array] = None
         self.step_update_l1_path_: Optional[Array] = None
+        self.step_size_path_: Optional[Array] = None
         self.mean_instability_path_: Optional[Array] = None
         self.consensus_weight_path_: Optional[Array] = None
         self.conditional_mean_gamma_path_: Optional[Array] = None
@@ -430,6 +431,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
 
         coef_path = np.zeros((self.config.max_steps, p), dtype=float)
         step_update_l1_path = np.zeros(self.config.max_steps, dtype=float)
+        step_size_path = np.zeros(self.config.max_steps, dtype=float)
         mean_instability_path = np.zeros(self.config.max_steps, dtype=float)
         consensus_weight_path = np.zeros((self.config.max_steps, p), dtype=float)
         conditional_mean_gamma_path = np.zeros((self.config.max_steps, p), dtype=float)
@@ -449,6 +451,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
 
             bootstrap_features = np.zeros(self.config.n_inner_bootstraps, dtype=int)
             bootstrap_gammas = np.zeros(self.config.n_inner_bootstraps, dtype=float)
+            bootstrap_predictions = np.zeros((self.config.n_inner_bootstraps, n_train), dtype=float)
 
             for bag_idx in range(self.config.n_inner_bootstraps):
                 sample_idx = rng.choice(n_train, size=n_train, replace=True, p=sample_weight)
@@ -458,6 +461,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
                 )
                 bootstrap_features[bag_idx] = int(feature_idx)
                 bootstrap_gammas[bag_idx] = float(gamma)
+                bootstrap_predictions[bag_idx] = float(gamma) * X_train_std[:, feature_idx]
                 selected_feature_matrix[step, bag_idx] = int(feature_idx)
                 cumulative_feature_counts[feature_idx] += 1.0
 
@@ -477,28 +481,53 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
                 gamma_variance_step[feature_idx] = float(np.mean((gamma_j - conditional_mean_gamma_step[feature_idx]) ** 2))
 
             consensus_weight = np.zeros(p, dtype=float)
-            eligible = (
-                (selection_frequency_step >= self.config.min_consensus_frequency)
-                & (sign_consistency_step >= self.config.min_sign_consistency)
-            )
-            if np.any(eligible):
-                frequency_factor = np.power(selection_frequency_step[eligible], self.config.consensus_frequency_power)
-                sign_factor = np.power(sign_consistency_step[eligible], self.config.consensus_sign_power)
+            active = selection_frequency_step > 0.0
+            if np.any(active):
+                frequency_gate = np.ones(np.count_nonzero(active), dtype=float)
+                sign_gate = np.ones(np.count_nonzero(active), dtype=float)
+                if self.config.min_consensus_frequency > 0.0:
+                    frequency_gate = np.minimum(
+                        selection_frequency_step[active] / float(self.config.min_consensus_frequency),
+                        1.0,
+                    )
+                if self.config.min_sign_consistency > 0.0:
+                    sign_gate = np.minimum(
+                        sign_consistency_step[active] / float(self.config.min_sign_consistency),
+                        1.0,
+                    )
+                frequency_factor = np.power(selection_frequency_step[active], self.config.consensus_frequency_power)
+                sign_factor = np.power(sign_consistency_step[active], self.config.consensus_sign_power)
                 instability_factor = np.power(
-                    1.0 + self.config.instability_lambda * gamma_variance_step[eligible],
+                    1.0 + self.config.instability_lambda * gamma_variance_step[active],
                     self.config.instability_power,
                 )
-                consensus_weight[eligible] = frequency_factor * sign_factor / np.maximum(instability_factor, eps)
+                consensus_weight[active] = (
+                    frequency_gate * sign_gate * frequency_factor * sign_factor / np.maximum(instability_factor, eps)
+                )
 
-            delta_coef = self.config.eta * consensus_weight * conditional_mean_gamma_step
-            delta_pred = X_train_std @ delta_coef
+            direction_coef = consensus_weight * conditional_mean_gamma_step
+            direction_pred = X_train_std @ direction_coef
+            consensus_prediction = np.mean(bootstrap_predictions, axis=0)
+            prediction_instability = np.mean(
+                (bootstrap_predictions - consensus_prediction[None, :]) ** 2,
+                axis=0,
+            )
+            numerator = float(np.dot(residual, direction_pred))
+            denom_main = (1.0 / self.config.eta) * float(np.dot(direction_pred, direction_pred))
+            denom_penalty = self.config.instability_lambda * float(np.sum(prediction_instability))
+            denominator = max(denom_main + denom_penalty, eps)
+            alpha = numerator / denominator if np.any(active) else 0.0
+
+            delta_coef = alpha * direction_coef
+            delta_pred = alpha * direction_pred
 
             coef = coef + delta_coef
             pred = pred + delta_pred
 
             coef_path[step] = coef
             step_update_l1_path[step] = float(np.sum(np.abs(delta_coef)))
-            mean_instability_path[step] = float(np.mean(gamma_variance_step[unique_features])) if unique_features.size else 0.0
+            step_size_path[step] = float(alpha)
+            mean_instability_path[step] = float(np.mean(prediction_instability))
             consensus_weight_path[step] = consensus_weight
             conditional_mean_gamma_path[step] = conditional_mean_gamma_step
             sign_consistency_path[step] = sign_consistency_step
@@ -506,6 +535,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
 
         self.coef_path_ = coef_path
         self.step_update_l1_path_ = step_update_l1_path
+        self.step_size_path_ = step_size_path
         self.mean_instability_path_ = mean_instability_path
         self.consensus_weight_path_ = consensus_weight_path
         self.conditional_mean_gamma_path_ = conditional_mean_gamma_path
@@ -530,6 +560,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
                     "valid_mse": mse,
                     "support_size": float(support_size),
                     "step_update_l1": float(step_update_l1_path[step - 1]),
+                    "step_size_alpha": float(step_size_path[step - 1]),
                     "mean_instability": float(mean_instability_path[step - 1]),
                     "mean_consensus_weight": float(np.mean(consensus_weight_path[step - 1])),
                     "mean_sign_consistency": float(np.mean(sign_consistency_path[step - 1])),

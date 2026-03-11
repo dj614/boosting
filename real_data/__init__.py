@@ -1,5 +1,6 @@
 from .catalog import get_real_dataset_spec, iter_real_dataset_specs, list_real_dataset_names
 from .download import download_real_dataset, download_real_datasets
+from .splits import create_real_data_split_manifest, create_real_data_split_manifests
 from .preprocess import prepare_real_dataset, prepare_real_datasets
 from .schema import (
     DEFAULT_REAL_DATA_ROOT,
@@ -26,4 +27,6 @@ __all__ = [
     "download_real_datasets",
     "prepare_real_dataset",
     "prepare_real_datasets",
+    "create_real_data_split_manifest",
+    "create_real_data_split_manifests",
 ]

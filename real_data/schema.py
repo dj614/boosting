@@ -35,8 +35,14 @@ class ProcessedDatasetPaths:
     cleaned_table_path: Path
     manifest_path: Path
 
+@dataclass(frozen=True)
+class SplitManifestPaths:
+    dataset_root: Path
+    split_dir: Path
+
 DEFAULT_REAL_DATA_ROOT = Path("data") / "raw" / "real"
 DEFAULT_REAL_PROCESSED_ROOT = Path("data") / "processed" / "real"
+DEFAULT_REAL_SPLIT_ROOT = Path("data") / "processed" / "real" / "split_manifests"
 
 
 def dataset_raw_paths(dataset_name: str, root: Path | str = DEFAULT_REAL_DATA_ROOT) -> RawDatasetPaths:
@@ -62,6 +68,19 @@ def dataset_processed_paths(
         cleaned_table_path=dataset_root / "cleaned_table.csv",
         manifest_path=dataset_root / "manifest.json",
     )
+
+
+def dataset_split_paths(
+    dataset_name: str,
+    root: Path | str = DEFAULT_REAL_SPLIT_ROOT,
+) -> SplitManifestPaths:
+    base_root = Path(root)
+    dataset_root = base_root / dataset_name
+    return SplitManifestPaths(
+        dataset_root=dataset_root,
+        split_dir=dataset_root,
+    )
+
 
 def ensure_parent_dirs(paths: Sequence[Path]) -> None:
     for path in paths:

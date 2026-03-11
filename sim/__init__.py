@@ -33,17 +33,30 @@ from .grouped_classification_eval import (
     save_prediction_frame,
 )
 
-from .experiment1_step3_analysis import (
-    FocusPair,
-    aggregate_trajectories,
-    bootstrap_pairwise_metric_differences,
-    infer_focus_pairs,
-    load_step2_artifacts,
-    make_analysis_summary,
-    pairwise_loss_deltas,
-    summarize_group_metrics,
-    summarize_model_metrics,
-)
+try:
+    from .experiment1_step3_analysis import (
+        FocusPair,
+        aggregate_trajectories,
+        bootstrap_pairwise_metric_differences,
+        infer_focus_pairs,
+        load_step2_artifacts,
+        make_analysis_summary,
+        pairwise_loss_deltas,
+        summarize_group_metrics,
+        summarize_model_metrics,
+    )
+except ModuleNotFoundError:  # pragma: no cover
+    from .group_risk_redistribution_analysis import (
+        FocusPair,
+        aggregate_trajectories,
+        bootstrap_pairwise_metric_differences,
+        infer_focus_pairs,
+        load_step2_artifacts,
+        make_analysis_summary,
+        pairwise_loss_deltas,
+        summarize_group_metrics,
+        summarize_model_metrics,
+    )
 
 from .group_risk_ensemble_models import (
     BinaryEnsembleWrapper,

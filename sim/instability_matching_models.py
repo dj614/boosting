@@ -13,6 +13,8 @@ from sklearn.ensemble import (
 )
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
+from sim.ctb_core import ConsensusTransportBoosting
+
 try:
     from xgboost import XGBClassifier, XGBRegressor
 except Exception:  # pragma: no cover
@@ -108,6 +110,37 @@ def make_default_learner_specs(random_state: int = 0) -> Dict[str, LearnerSpec]:
         ),
     )
 
+    specs["ctb_stump_regression"] = LearnerSpec(
+        name="ctb_stump_regression",
+        task_type="regression",
+        estimator=ConsensusTransportBoosting(
+            task_type="regression",
+            n_estimators=50,
+            n_inner_bootstraps=8,
+            eta=1.0,
+            instability_penalty=0.0,
+            weight_power=1.0,
+            max_depth=1,
+            min_samples_leaf=5,
+            random_state=random_state,
+        ),
+    )
+    specs["ctb_depth3_regression"] = LearnerSpec(
+        name="ctb_depth3_regression",
+        task_type="regression",
+        estimator=ConsensusTransportBoosting(
+            task_type="regression",
+            n_estimators=50,
+            n_inner_bootstraps=8,
+            eta=1.0,
+            instability_penalty=0.0,
+            weight_power=1.0,
+            max_depth=3,
+            min_samples_leaf=5,
+            random_state=random_state,
+        ),
+    )
+
     specs["bagging_tree_deep_classification"] = LearnerSpec(
         name="bagging_tree_deep_classification",
         task_type="classification",
@@ -149,6 +182,37 @@ def make_default_learner_specs(random_state: int = 0) -> Dict[str, LearnerSpec]:
             n_estimators=300,
             max_depth=3,
             subsample=1.0,
+            random_state=random_state,
+        ),
+    )
+
+    specs["ctb_stump_classification"] = LearnerSpec(
+        name="ctb_stump_classification",
+        task_type="classification",
+        estimator=ConsensusTransportBoosting(
+            task_type="classification",
+            n_estimators=50,
+            n_inner_bootstraps=8,
+            eta=1.0,
+            instability_penalty=0.0,
+            weight_power=1.0,
+            max_depth=1,
+            min_samples_leaf=5,
+            random_state=random_state,
+        ),
+    )
+    specs["ctb_depth3_classification"] = LearnerSpec(
+        name="ctb_depth3_classification",
+        task_type="classification",
+        estimator=ConsensusTransportBoosting(
+            task_type="classification",
+            n_estimators=50,
+            n_inner_bootstraps=8,
+            eta=1.0,
+            instability_penalty=0.0,
+            weight_power=1.0,
+            max_depth=3,
+            min_samples_leaf=5,
             random_state=random_state,
         ),
     )
@@ -210,10 +274,14 @@ def default_methods_for_task(task_type: TaskType) -> list[str]:
             "bagging_tree_shallow_regression",
             "gbdt_stump_regression",
             "gbdt_depth3_regression",
+            "ctb_stump_regression",
+            "ctb_depth3_regression",
         ]
     return [
         "bagging_tree_deep_classification",
         "bagging_tree_shallow_classification",
         "gbdt_stump_classification",
         "gbdt_depth3_classification",
+        "ctb_stump_classification",
+        "ctb_depth3_classification",
     ]

@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+from typing import Literal
+
+import numpy as np
+from sklearn.base import BaseEstimator
+from sklearn.tree import DecisionTreeRegressor
+
+
+TaskType = Literal["regression", "classification"]
+
+
+class ConsensusTransportBoosting(BaseEstimator):
+    """Minimal CTB implementation for regression and binary classification.
+
+    The weak learner is always a regression tree fit to the current pseudo-response.
+    For binary classification, the ensemble state is maintained on the raw score scale
+    and probabilities are obtained via a sigmoid link.
+    """
+
+    def __init__(
+        self,
+        *,
+        task_type: TaskType = "regression",
+        n_estimators: int = 50,
+        n_inner_bootstraps: int = 8,
+        eta: float = 1.0,
+        instability_penalty: float = 0.0,
+        weight_power: float = 1.0,
+        weight_eps: float = 1e-8,
+        denom_eps: float = 1e-12,
+        max_depth: int | None = 1,
+        min_samples_leaf: int = 5,
+        random_state: int | None = None,
+    ):
+        self.task_type = task_type
+        self.n_estimators = int(n_estimators)
+        self.n_inner_bootstraps = int(n_inner_bootstraps)
+        self.eta = float(eta)
+        self.instability_penalty = float(instability_penalty)
+        self.weight_power = float(weight_power)
+        self.weight_eps = float(weight_eps)
+        self.denom_eps = float(denom_eps)
+        self.max_depth = max_depth
+        self.min_samples_leaf = int(min_samples_leaf)
+        self.random_state = random_state
+
+    @staticmethod
+    def _sigmoid(score: np.ndarray) -> np.ndarray:
+        clipped = np.clip(np.asarray(score, dtype=float), -30.0, 30.0)
+        return 1.0 / (1.0 + np.exp(-clipped))
+
+    def _pseudo_response(self, y: np.ndarray, score: np.ndarray) -> np.ndarray:
+        if self.task_type == "regression":
+            return np.asarray(y, dtype=float) - np.asarray(score, dtype=float)
+        proba = self._sigmoid(score)
+        return np.asarray(y, dtype=float) - proba
+
+    def _sampling_weights(self, pseudo_response: np.ndarray) -> np.ndarray:
+        weights = np.power(np.abs(np.asarray(pseudo_response, dtype=float)) + self.weight_eps, self.weight_power)
+        weight_sum = float(np.sum(weights))
+        if not np.isfinite(weight_sum) or weight_sum <= 0.0:
+            return np.full_like(weights, fill_value=1.0 / float(weights.size), dtype=float)
+        return weights / weight_sum
+
+    def _make_weak_learner(self, random_state: int | None) -> DecisionTreeRegressor:
+        return DecisionTreeRegressor(
+            max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
+            random_state=random_state,
+        )
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "ConsensusTransportBoosting":
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=float).reshape(-1)
+        if X.ndim != 2:
+            raise ValueError(f"Expected 2D X, got shape={X.shape}")
+        if y.shape[0] != X.shape[0]:
+            raise ValueError(f"Mismatched X/y with shapes {X.shape} and {y.shape}")
+        if self.task_type not in {"regression", "classification"}:
+            raise ValueError(f"Unsupported task_type={self.task_type!r}")
+        if self.n_estimators <= 0:
+            raise ValueError("n_estimators must be positive")
+        if self.n_inner_bootstraps <= 0:
+            raise ValueError("n_inner_bootstraps must be positive")
+        if self.eta <= 0.0:
+            raise ValueError("eta must be positive")
+
+        rng = np.random.default_rng(self.random_state)
+        n_samples = X.shape[0]
+        train_score = np.zeros(n_samples, dtype=float)
+
+        self.learners_ = []
+        self.alphas_ = []
+        self.train_score_path_ = []
+        self.n_features_in_ = X.shape[1]
+
+        for _ in range(self.n_estimators):
+            pseudo_response = self._pseudo_response(y, train_score)
+            sampling_weights = self._sampling_weights(pseudo_response)
+
+            round_learners = []
+            round_predictions = np.empty((self.n_inner_bootstraps, n_samples), dtype=float)
+            for bootstrap_idx in range(self.n_inner_bootstraps):
+                sample_idx = rng.choice(n_samples, size=n_samples, replace=True, p=sampling_weights)
+                learner = self._make_weak_learner(random_state=int(rng.integers(0, 2**31 - 1)))
+                learner.fit(X[sample_idx], pseudo_response[sample_idx])
+                round_learners.append(learner)
+                round_predictions[bootstrap_idx] = np.asarray(learner.predict(X), dtype=float).reshape(-1)
+
+            consensus = round_predictions.mean(axis=0)
+            instability = np.mean((round_predictions - consensus[None, :]) ** 2, axis=0)
+
+            numerator = float(np.dot(pseudo_response, consensus))
+            denom_main = (1.0 / self.eta) * float(np.dot(consensus, consensus))
+            denom_penalty = 2.0 * self.instability_penalty * float(np.dot(instability, consensus**2))
+            denominator = max(denom_main + denom_penalty, self.denom_eps)
+            alpha = numerator / denominator
+
+            train_score = train_score + alpha * consensus
+            self.learners_.append(round_learners)
+            self.alphas_.append(float(alpha))
+            self.train_score_path_.append(train_score.copy())
+
+        self.alphas_ = np.asarray(self.alphas_, dtype=float)
+        self.train_score_ = train_score
+        return self
+
+    def decision_function(self, X: np.ndarray) -> np.ndarray:
+        if not hasattr(self, "learners_"):
+            raise ValueError("Model is not fitted")
+        X = np.asarray(X, dtype=float)
+        score = np.zeros(X.shape[0], dtype=float)
+        for alpha, round_learners in zip(self.alphas_, self.learners_):
+            round_pred = np.mean(
+                [np.asarray(learner.predict(X), dtype=float).reshape(-1) for learner in round_learners],
+                axis=0,
+            )
+            score = score + float(alpha) * round_pred
+        return score
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        score = self.decision_function(X)
+        if self.task_type == "classification":
+            return (self._sigmoid(score) >= 0.5).astype(float)
+        return score
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if self.task_type != "classification":
+            raise ValueError("predict_proba is only available for classification models")
+        proba_one = self._sigmoid(self.decision_function(X))
+        return np.column_stack([1.0 - proba_one, proba_one])

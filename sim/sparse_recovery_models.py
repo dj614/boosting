@@ -403,13 +403,16 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         self.step_update_l1_path_: Optional[Array] = None
         self.step_size_path_: Optional[Array] = None
         self.mean_instability_path_: Optional[Array] = None
+        self.support_score_path_: Optional[Array] = None
         self.consensus_weight_path_: Optional[Array] = None
         self.conditional_mean_gamma_path_: Optional[Array] = None
         self.sign_consistency_path_: Optional[Array] = None
         self.selected_feature_matrix_: Optional[Array] = None
         self.selection_frequency_path_: Optional[Array] = None
         self.selection_frequency_: Optional[Array] = None
+        self.support_score_: Optional[Array] = None
         self.selected_coef_: Optional[Array] = None
+        self.selected_support_from_frequency_: Optional[Array] = None
 
     @property
     def model_name(self) -> str:
@@ -433,6 +436,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         step_update_l1_path = np.zeros(self.config.max_steps, dtype=float)
         step_size_path = np.zeros(self.config.max_steps, dtype=float)
         mean_instability_path = np.zeros(self.config.max_steps, dtype=float)
+        support_score_path = np.zeros((self.config.max_steps, p), dtype=float)
         consensus_weight_path = np.zeros((self.config.max_steps, p), dtype=float)
         conditional_mean_gamma_path = np.zeros((self.config.max_steps, p), dtype=float)
         sign_consistency_path = np.zeros((self.config.max_steps, p), dtype=float)
@@ -524,6 +528,12 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
             coef = coef + delta_coef
             pred = pred + delta_pred
 
+            support_evidence = consensus_weight * np.abs(conditional_mean_gamma_step)
+            if step == 0:
+                support_score_path[step] = support_evidence
+            else:
+                support_score_path[step] = (step * support_score_path[step - 1] + support_evidence) / float(step + 1)
+
             coef_path[step] = coef
             step_update_l1_path[step] = float(np.sum(np.abs(delta_coef)))
             step_size_path[step] = float(alpha)
@@ -536,6 +546,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         self.coef_path_ = coef_path
         self.step_update_l1_path_ = step_update_l1_path
         self.step_size_path_ = step_size_path
+        self.support_score_path_ = support_score_path
         self.mean_instability_path_ = mean_instability_path
         self.consensus_weight_path_ = consensus_weight_path
         self.conditional_mean_gamma_path_ = conditional_mean_gamma_path
@@ -563,6 +574,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
                     "step_size_alpha": float(step_size_path[step - 1]),
                     "mean_instability": float(mean_instability_path[step - 1]),
                     "mean_consensus_weight": float(np.mean(consensus_weight_path[step - 1])),
+                    "mean_support_score": float(np.mean(support_score_path[step - 1])),
                     "mean_sign_consistency": float(np.mean(sign_consistency_path[step - 1])),
                 }
             )
@@ -573,9 +585,13 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         self.selection_trace_ = pd.DataFrame(rows)
         self.selected_step_ = int(best_step)
         self.selected_coef_ = coef_path[self.selected_step_ - 1].copy()
+        self.support_score_ = support_score_path[self.selected_step_ - 1].copy()
         self.selection_frequency_ = selection_frequency_path[self.selected_step_ - 1].copy()
-        self.selected_support_ = np.flatnonzero(
+        self.selected_support_from_frequency_ = np.flatnonzero(
             self.selection_frequency_ >= self.config.support_frequency_threshold
+        ).astype(int)
+        self.selected_support_ = np.flatnonzero(
+            self.support_score_ >= self.config.support_frequency_threshold
         ).astype(int)
         return self
 
@@ -604,6 +620,23 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         return out
 
     def support_at_step(self, step: Optional[int] = None) -> Array:
+        if self.support_score_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_step = int(step or self.selected_step_ or self.config.max_steps)
+        _validate_step(use_step, self.config.max_steps)
+        support_score = self.support_score_path_[use_step - 1]
+        return np.flatnonzero(
+            support_score >= self.config.support_frequency_threshold
+        ).astype(int)
+
+    def support_score_at_step(self, step: Optional[int] = None) -> Array:
+        if self.support_score_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_step = int(step or self.selected_step_ or self.config.max_steps)
+        _validate_step(use_step, self.config.max_steps)
+        return self.support_score_path_[use_step - 1].copy()
+
+    def support_from_frequency_at_step(self, step: Optional[int] = None) -> Array:
         if self.selection_frequency_path_ is None:
             raise RuntimeError("Model has not been fit")
         use_step = int(step or self.selected_step_ or self.config.max_steps)

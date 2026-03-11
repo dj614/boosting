@@ -56,6 +56,8 @@ class CTBSparseConfig:
     max_steps: int = 300
     n_inner_bootstraps: int = 8
     eta: float = 1.0
+    enable_group_consensus: bool = False
+    group_corr_threshold: float = 0.9
     residual_weight_power: float = 1.0
     residual_weight_eps: float = 1e-8
     consensus_frequency_power: float = 2.0
@@ -403,6 +405,9 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         self.step_update_l1_path_: Optional[Array] = None
         self.step_size_path_: Optional[Array] = None
         self.mean_instability_path_: Optional[Array] = None
+        self.group_support_score_path_: Optional[Array] = None
+        self.feature_groups_: Optional[List[Array]] = None
+        self.feature_to_group_: Optional[Array] = None
         self.support_score_path_: Optional[Array] = None
         self.consensus_weight_path_: Optional[Array] = None
         self.conditional_mean_gamma_path_: Optional[Array] = None
@@ -428,6 +433,17 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         self.standardization_ = stats
 
         n_train, p = X_train_std.shape
+        if self.config.enable_group_consensus:
+            feature_groups, feature_to_group = _build_correlation_groups(
+                X_train_std,
+                self.config.group_corr_threshold,
+            )
+        else:
+            feature_groups = [np.array([j], dtype=int) for j in range(p)]
+            feature_to_group = np.arange(p, dtype=int)
+        n_groups = len(feature_groups)
+        self.feature_groups_ = feature_groups
+        self.feature_to_group_ = feature_to_group
         rng = np.random.default_rng(self.config.random_state)
         coef = np.zeros(p, dtype=float)
         pred = np.zeros(n_train, dtype=float)
@@ -439,6 +455,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         support_score_path = np.zeros((self.config.max_steps, p), dtype=float)
         consensus_weight_path = np.zeros((self.config.max_steps, p), dtype=float)
         conditional_mean_gamma_path = np.zeros((self.config.max_steps, p), dtype=float)
+        group_support_score_path = np.zeros((self.config.max_steps, n_groups), dtype=float)
         sign_consistency_path = np.zeros((self.config.max_steps, p), dtype=float)
         selected_feature_matrix = np.zeros((self.config.max_steps, self.config.n_inner_bootstraps), dtype=int)
         selection_frequency_path = np.zeros((self.config.max_steps, p), dtype=float)
@@ -484,6 +501,19 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
                 sign_consistency_step[feature_idx] = float(np.abs(np.mean(np.sign(gamma_j))))
                 gamma_variance_step[feature_idx] = float(np.mean((gamma_j - conditional_mean_gamma_step[feature_idx]) ** 2))
 
+            group_selection_frequency = np.zeros(n_groups, dtype=float)
+            group_sign_consistency = np.zeros(n_groups, dtype=float)
+            group_mean_gamma = np.zeros(n_groups, dtype=float)
+            group_gamma_variance = np.zeros(n_groups, dtype=float)
+            for group_idx, members in enumerate(feature_groups):
+                member_mask = np.isin(bootstrap_features, members)
+                if not np.any(member_mask):
+                    continue
+                gamma_g = bootstrap_gammas[member_mask]
+                group_selection_frequency[group_idx] = float(np.mean(member_mask))
+                group_mean_gamma[group_idx] = float(np.mean(gamma_g))
+                group_sign_consistency[group_idx] = float(np.abs(np.mean(np.sign(gamma_g))))
+                group_gamma_variance[group_idx] = float(np.mean((gamma_g - group_mean_gamma[group_idx]) ** 2))
             consensus_weight = np.zeros(p, dtype=float)
             active = selection_frequency_step > 0.0
             if np.any(active):
@@ -510,6 +540,54 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
                 )
 
             direction_coef = consensus_weight * conditional_mean_gamma_step
+            if self.config.enable_group_consensus:
+                group_weight = np.zeros(n_groups, dtype=float)
+                active_groups = group_selection_frequency > 0.0
+                if np.any(active_groups):
+                    group_frequency_gate = np.ones(np.count_nonzero(active_groups), dtype=float)
+                    group_sign_gate = np.ones(np.count_nonzero(active_groups), dtype=float)
+                    if self.config.min_consensus_frequency > 0.0:
+                        group_frequency_gate = np.minimum(
+                            group_selection_frequency[active_groups] / float(self.config.min_consensus_frequency),
+                            1.0,
+                        )
+                    if self.config.min_sign_consistency > 0.0:
+                        group_sign_gate = np.minimum(
+                            group_sign_consistency[active_groups] / float(self.config.min_sign_consistency),
+                            1.0,
+                        )
+                    group_frequency_factor = np.power(
+                        group_selection_frequency[active_groups],
+                        self.config.consensus_frequency_power,
+                    )
+                    group_sign_factor = np.power(
+                        group_sign_consistency[active_groups],
+                        self.config.consensus_sign_power,
+                    )
+                    group_instability_factor = np.power(
+                        1.0 + self.config.instability_lambda * group_gamma_variance[active_groups],
+                        self.config.instability_power,
+                    )
+                    group_weight[active_groups] = (
+                        group_frequency_gate
+                        * group_sign_gate
+                        * group_frequency_factor
+                        * group_sign_factor
+                        / np.maximum(group_instability_factor, eps)
+                    )
+
+                direction_coef = np.zeros(p, dtype=float)
+                group_residual_alignment = np.abs(X_train_std.T @ residual)
+                for group_idx, members in enumerate(feature_groups):
+                    if group_weight[group_idx] <= 0.0:
+                        continue
+                    representative = int(members[np.argmax(group_residual_alignment[members])])
+                    direction_coef[representative] = group_weight[group_idx] * group_mean_gamma[group_idx]
+                    consensus_weight[representative] = group_weight[group_idx]
+                    conditional_mean_gamma_step[representative] = group_mean_gamma[group_idx]
+                    sign_consistency_step[representative] = group_sign_consistency[group_idx]
+            else:
+                group_weight = np.zeros(n_groups, dtype=float)
             direction_pred = X_train_std @ direction_coef
             consensus_prediction = np.mean(bootstrap_predictions, axis=0)
             prediction_instability = np.mean(
@@ -529,11 +607,24 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
             pred = pred + delta_pred
 
             support_evidence = consensus_weight * np.abs(conditional_mean_gamma_step)
+            group_support_evidence = group_weight * np.abs(group_mean_gamma)
+            if self.config.enable_group_consensus:
+                support_evidence = np.zeros(p, dtype=float)
+                for group_idx, members in enumerate(feature_groups):
+                    if group_support_evidence[group_idx] <= 0.0:
+                        continue
+                    support_evidence[members] = np.maximum(
+                        support_evidence[members],
+                        group_support_evidence[group_idx],
+                    )
             if step == 0:
                 support_score_path[step] = support_evidence
+                group_support_score_path[step] = group_support_evidence
             else:
                 support_score_path[step] = (step * support_score_path[step - 1] + support_evidence) / float(step + 1)
-
+                group_support_score_path[step] = (
+                    step * group_support_score_path[step - 1] + group_support_evidence
+                ) / float(step + 1)
             coef_path[step] = coef
             step_update_l1_path[step] = float(np.sum(np.abs(delta_coef)))
             step_size_path[step] = float(alpha)
@@ -547,6 +638,7 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         self.step_update_l1_path_ = step_update_l1_path
         self.step_size_path_ = step_size_path
         self.support_score_path_ = support_score_path
+        self.group_support_score_path_ = group_support_score_path
         self.mean_instability_path_ = mean_instability_path
         self.consensus_weight_path_ = consensus_weight_path
         self.conditional_mean_gamma_path_ = conditional_mean_gamma_path
@@ -575,6 +667,9 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
                     "mean_instability": float(mean_instability_path[step - 1]),
                     "mean_consensus_weight": float(np.mean(consensus_weight_path[step - 1])),
                     "mean_support_score": float(np.mean(support_score_path[step - 1])),
+                    "group_support_size": float(
+                        np.count_nonzero(group_support_score_path[step - 1] >= self.config.support_frequency_threshold)
+                    ),
                     "mean_sign_consistency": float(np.mean(sign_consistency_path[step - 1])),
                 }
             )
@@ -635,6 +730,29 @@ class CTBSparseRegressorWrapper(SparseRegressionWrapperBase):
         use_step = int(step or self.selected_step_ or self.config.max_steps)
         _validate_step(use_step, self.config.max_steps)
         return self.support_score_path_[use_step - 1].copy()
+
+    def group_support_at_step(self, step: Optional[int] = None) -> List[Array]:
+        if self.group_support_score_path_ is None or self.feature_groups_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_step = int(step or self.selected_step_ or self.config.max_steps)
+        _validate_step(use_step, self.config.max_steps)
+        group_scores = self.group_support_score_path_[use_step - 1]
+        active_groups = np.flatnonzero(
+            group_scores >= self.config.support_frequency_threshold
+        ).astype(int)
+        return [self.feature_groups_[idx].copy() for idx in active_groups]
+
+    def group_support_score_at_step(self, step: Optional[int] = None) -> Array:
+        if self.group_support_score_path_ is None:
+            raise RuntimeError("Model has not been fit")
+        use_step = int(step or self.selected_step_ or self.config.max_steps)
+        _validate_step(use_step, self.config.max_steps)
+        return self.group_support_score_path_[use_step - 1].copy()
+
+    def feature_groups(self) -> List[Array]:
+        if self.feature_groups_ is None:
+            raise RuntimeError("Model has not been fit")
+        return [group.copy() for group in self.feature_groups_]
 
     def support_from_frequency_at_step(self, step: Optional[int] = None) -> Array:
         if self.selection_frequency_path_ is None:
@@ -983,6 +1101,39 @@ def _fit_componentwise_bootstrap_learner(X: Array, y_centered: Array) -> Tuple[i
     gamma = float(numer[best_feature] / denom[best_feature])
     return best_feature, gamma
 
+def _build_correlation_groups(X_std: Array, corr_threshold: float) -> Tuple[List[Array], Array]:
+    p = X_std.shape[1]
+    if p == 0:
+        return [], np.zeros(0, dtype=int)
+    if p == 1:
+        return [np.array([0], dtype=int)], np.array([0], dtype=int)
+
+    corr = np.abs(np.corrcoef(X_std, rowvar=False))
+    corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(corr, 1.0)
+
+    visited = np.zeros(p, dtype=bool)
+    feature_to_group = np.full(p, -1, dtype=int)
+    groups: List[Array] = []
+
+    for start in range(p):
+        if visited[start]:
+            continue
+        stack = [int(start)]
+        members: List[int] = []
+        visited[start] = True
+        while stack:
+            node = stack.pop()
+            members.append(node)
+            neighbors = np.flatnonzero(corr[node] >= corr_threshold)
+            for nb in neighbors.astype(int):
+                if not visited[nb]:
+                    visited[nb] = True
+                    stack.append(int(nb))
+        group_idx = len(groups)
+        groups.append(np.asarray(sorted(members), dtype=int))
+        feature_to_group[groups[-1]] = group_idx
+    return groups, feature_to_group
 
 def _residual_sampling_weights(residual: Array, weight_power: float, weight_eps: float) -> Array:
     if weight_eps <= 0.0:

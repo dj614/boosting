@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -92,6 +93,7 @@ def _load_raw_frame(dataset_name: str, raw_root: Path) -> pd.DataFrame:
             archive_member=spec.archive_member,
             extracted_members=extracted_members,
         )
+        member_path = _resolve_nested_archive_member(dataset_name=dataset_name, member_path=member_path)
         if member_path.suffix.lower() in {".xlsx", ".xls"}:
             return pd.read_excel(member_path)
         if member_path.suffix.lower() == ".csv":
@@ -157,6 +159,39 @@ def _resolve_archive_member_path(*, dataset_name: str, raw_paths, archive_member
         f"Archive member not found for {dataset_name!r}: requested {requested}; "
         f"available extracted files: {[str(path.relative_to(raw_paths.extracted_dir)) for path in filesystem_members]}"
     )
+
+
+def _extract_nested_zip(member_path: Path) -> Path:
+    target_dir = member_path.with_suffix("")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(member_path, mode="r") as zf:
+        zf.extractall(target_dir)
+    return target_dir
+
+
+def _resolve_nested_archive_member(dataset_name: str, member_path: Path) -> Path:
+    current = member_path
+    seen: set[Path] = set()
+    while current.suffix.lower() == ".zip":
+        resolved = current.resolve()
+        if resolved in seen:
+            raise RuntimeError(f"Nested archive resolution loop detected for {dataset_name!r}: {current}")
+        seen.add(resolved)
+        extracted_dir = _extract_nested_zip(current)
+        tabular_files = sorted(path for path in extracted_dir.rglob("*") if path.is_file() and path.suffix.lower() in {".csv", ".xlsx", ".xls"})
+        if len(tabular_files) == 1:
+            current = tabular_files[0]
+            continue
+        if len(tabular_files) == 0:
+            nested_archives = sorted(path for path in extracted_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".zip")
+            if len(nested_archives) == 1:
+                current = nested_archives[0]
+                continue
+        raise ValueError(
+            f"Unsupported nested archive layout for {dataset_name!r}: {current}; "
+            f"tabular candidates={ [str(path.relative_to(extracted_dir)) for path in tabular_files] }"
+        )
+    return current
 
 
 def _resolve_column_name(frame: pd.DataFrame, requested: str) -> str:

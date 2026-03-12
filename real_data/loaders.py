@@ -39,12 +39,19 @@ def _slice_metadata(metadata: Mapping[str, Array], index: Array) -> Dict[str, Ar
 
 def _coerce_categorical_columns(frame: pd.DataFrame, categorical_columns) -> pd.DataFrame:
     categorical_set = {str(col) for col in categorical_columns if str(col) in frame.columns}
-    if not categorical_set:
-        return frame
     out = frame.copy()
     for col in out.columns:
+        series = out[col]
         if str(col) in categorical_set:
-            out[col] = out[col].astype("string")
+            object_series = series.astype("object")
+            out[col] = object_series.where(pd.notna(object_series), np.nan)
+            continue
+        if pd.api.types.is_extension_array_dtype(series.dtype):
+            if pd.api.types.is_numeric_dtype(series.dtype) or pd.api.types.is_bool_dtype(series.dtype):
+                out[col] = pd.to_numeric(series, errors="coerce")
+            else:
+                object_series = series.astype("object")
+                out[col] = object_series.where(pd.notna(object_series), np.nan)
     return out
 
 

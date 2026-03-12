@@ -35,6 +35,31 @@ def _download_bytes(url: str) -> bytes:
     with urlopen(url) as response:  # nosec - downloading known public datasets
         return response.read()
 
+def _openml_features_to_frame(data, feature_names) -> pd.DataFrame:
+    if isinstance(data, pd.DataFrame):
+        frame = data.copy()
+    else:
+        matrix = data.toarray() if hasattr(data, "toarray") else data
+        columns = [str(name).strip() for name in (feature_names or [])]
+        frame = pd.DataFrame(matrix, columns=columns or None)
+    frame.columns = [str(col).strip() for col in frame.columns]
+    return frame.reset_index(drop=True)
+
+
+def _openml_target_to_series(target, target_column: str, n_rows: int) -> pd.Series:
+    if isinstance(target, pd.Series):
+        series = target.copy()
+    else:
+        series = pd.Series(target)
+    series = series.reset_index(drop=True)
+    if int(series.shape[0]) != int(n_rows):
+        raise ValueError(
+            f"OpenML target length mismatch for target column {target_column!r}: "
+            f"got {series.shape[0]} rows for {n_rows} feature rows"
+        )
+    series.name = str(target_column)
+    return series
+
 def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.DataFrame) -> Path:
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
     ensure_parent_dirs([paths.raw_table_path])

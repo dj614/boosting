@@ -467,3 +467,103 @@ def expand_tabular_model_grid(
         if family in {"bagging", "rf"}:
             for depth in max_depths:
                 for leaf in min_samples_leafs:
+                    grid.append(
+                        TabularBenchmarkModelConfig(
+                            task_type=task_type,
+                            family=family,
+                            max_depth=int(depth),
+                            n_estimators=int(n_estimators),
+                            min_samples_leaf=int(leaf),
+                            learning_rate=float(family_learning_rates[0]),
+                            subsample=float(family_subsamples[0]),
+                            colsample_bytree=float(family_colsample[0]),
+                            inner_bootstraps=int(family_inner_bootstraps[0]),
+                            eta=float(family_etas[0]),
+                            instability_penalty=float(instability_penalty),
+                            weight_power=float(weight_power),
+                            weight_eps=float(weight_eps),
+                            random_state=int(random_state),
+                        )
+                    )
+            continue
+
+        if family in {"gbdt", "xgb"}:
+            for depth in max_depths:
+                for lr in family_learning_rates:
+                    for subsample in family_subsamples:
+                        for colsample in family_colsample:
+                            grid.append(
+                                TabularBenchmarkModelConfig(
+                                    task_type=task_type,
+                                    family=family,
+                                    max_depth=int(depth),
+                                    n_estimators=int(n_estimators),
+                                    min_samples_leaf=int(min_samples_leafs[0]),
+                                    learning_rate=float(lr),
+                                    subsample=float(subsample),
+                                    colsample_bytree=float(colsample),
+                                    inner_bootstraps=int(family_inner_bootstraps[0]),
+                                    eta=float(family_etas[0]),
+                                    instability_penalty=float(instability_penalty),
+                                    weight_power=float(weight_power),
+                                    weight_eps=float(weight_eps),
+                                    random_state=int(random_state),
+                                )
+                            )
+            continue
+        if family == "ctb":
+            for depth in max_depths:
+                for leaf in min_samples_leafs:
+                    for inner_bootstrap in family_inner_bootstraps:
+                        for eta in family_etas:
+                            grid.append(
+                                TabularBenchmarkModelConfig(
+                                    task_type=task_type,
+                                    family=family,
+                                    max_depth=int(depth),
+                                    n_estimators=int(n_estimators),
+                                    min_samples_leaf=int(leaf),
+                                    learning_rate=float(family_learning_rates[0]),
+                                    subsample=float(family_subsamples[0]),
+                                    colsample_bytree=float(family_colsample[0]),
+                                    inner_bootstraps=int(inner_bootstrap),
+                                    eta=float(eta),
+                                    instability_penalty=float(instability_penalty),
+                                    weight_power=float(weight_power),
+                                    weight_eps=float(weight_eps),
+                                    random_state=int(random_state),
+                                )
+                            )
+            continue
+
+    return grid
+
+def _validate_checkpoint_outputs(requested: Sequence[int], out: Mapping[int, Array], max_checkpoint: int) -> None:
+    missing = [int(x) for x in requested if int(x) not in out]
+    if missing:
+        raise RuntimeError(
+            f"Failed to produce staged predictions for checkpoints {missing}; max_checkpoint={max_checkpoint}"
+        )
+
+
+def _prefix_average_predictions(estimator_outputs: Sequence[Array], checkpoints: Sequence[int]) -> Dict[int, Array]:
+    requested = sorted({int(x) for x in checkpoints})
+    if not requested:
+        return {}
+    max_requested = max(requested)
+    if max_requested > len(estimator_outputs):
+        raise ValueError(
+            f"Requested checkpoint {max_requested}, but estimator only has {len(estimator_outputs)} fitted learners"
+        )
+
+    cumulative = np.zeros_like(np.asarray(estimator_outputs[0], dtype=float), dtype=float)
+    out: Dict[int, Array] = {}
+    requested_set = set(requested)
+    for idx, pred in enumerate(estimator_outputs, start=1):
+        cumulative = cumulative + np.asarray(pred, dtype=float)
+        if idx in requested_set:
+            out[idx] = cumulative / float(idx)
+        if len(out) == len(requested):
+            break
+    _validate_checkpoint_outputs(requested, out, len(estimator_outputs))
+    return out

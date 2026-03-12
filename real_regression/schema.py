@@ -31,6 +31,7 @@ class RawRegressionDatasetPaths:
 class ProcessedRegressionDatasetPaths:
     dataset_root: Path
     cleaned_table_path: Path
+    cleaned_table_full_path: Path
     manifest_path: Path
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ def dataset_processed_paths(
     return ProcessedRegressionDatasetPaths(
         dataset_root=dataset_root,
         cleaned_table_path=dataset_root / "cleaned_table.csv",
+        cleaned_table_full_path=dataset_root / "cleaned_table_full.csv",
         manifest_path=dataset_root / "manifest.json",
     )
 

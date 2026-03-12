@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import zipfile
@@ -19,11 +20,6 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover
     sns = None
 
-try:  # pragma: no cover - optional dependency
-    from folktables import ACSDataSource
-except Exception:  # pragma: no cover
-    ACSDataSource = None
-
 from .catalog import get_real_regression_dataset_spec, list_real_regression_dataset_names
 from .schema import DEFAULT_REAL_REGRESSION_DATA_ROOT, dataset_raw_paths, ensure_parent_dirs, jsonable_mapping
 
@@ -37,6 +33,14 @@ _UCI_ARCHIVE_MEMBERS = {
     165: "Concrete_Data.xls",
     464: "train.csv",
 }
+
+_ACS_STATE_LIST = [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "PR",
+]
+_ACS_STATE_CODES = {
+    "AL": "01", "AK": "02", "AZ": "04", "AR": "05", "CA": "06", "CO": "08", "CT": "09", "DE": "10", "FL": "12", "GA": "13", "HI": "15", "ID": "16", "IL": "17", "IN": "18", "IA": "19", "KS": "20", "KY": "21", "LA": "22", "ME": "23", "MD": "24", "MA": "25", "MI": "26", "MN": "27", "MS": "28", "MO": "29", "MT": "30", "NE": "31", "NV": "32", "NH": "33", "NJ": "34", "NM": "35", "NY": "36", "NC": "37", "ND": "38", "OH": "39", "OK": "40", "OR": "41", "PA": "42", "RI": "44", "SC": "45", "SD": "46", "TN": "47", "TX": "48", "UT": "49", "VT": "50", "VA": "51", "WA": "53", "WV": "54", "WI": "55", "WY": "56", "PR": "72",
+}
+_ACS_CHUNKSIZE = 200_000
 
 _RAW_SAMPLE_ROWS = 5
 _RAW_FRAME_CACHE: Dict[tuple[str, str], pd.DataFrame] = {}
@@ -60,8 +64,64 @@ def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.Data
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
     ensure_parent_dirs([paths.raw_table_path])
     frame.head(_RAW_SAMPLE_ROWS).to_csv(paths.raw_table_path, index=False)
-    _RAW_FRAME_CACHE[_cache_key(dataset_name=dataset_name, output_root=output_root)] = frame.copy()
+    _RAW_FRAME_CACHE[_cache_key(dataset_name=dataset_name, output_root=output_root)] = frame
     return paths.raw_table_path
+
+
+def _acs_state_file_name(*, year: int, state: str, survey: str = "person") -> str:
+    survey_code = "p" if str(survey).strip().lower() == "person" else "h"
+    state_key = str(state).strip().upper()
+    if int(year) >= 2017:
+        return f"psam_{survey_code}{_ACS_STATE_CODES[state_key]}.csv"
+    return f"ss{str(year)[-2:]}{survey_code}{state_key.lower()}.csv"
+
+
+def _ensure_acs_state_file(*, year: int, horizon: str, survey: str, state: str, root_dir: Path) -> Path:
+    state_key = str(state).strip().upper()
+    if state_key not in _ACS_STATE_CODES:
+        raise ValueError(f"Unsupported ACS state code: {state!r}")
+    if str(horizon) not in {"1-Year", "5-Year"}:
+        raise ValueError(f"Unsupported ACS horizon: {horizon!r}")
+    if str(survey).strip().lower() not in {"person", "household"}:
+        raise ValueError(f"Unsupported ACS survey type: {survey!r}")
+
+    datadir = Path(root_dir) / str(year) / str(horizon)
+    datadir.mkdir(parents=True, exist_ok=True)
+    file_name = _acs_state_file_name(year=int(year), state=state_key, survey=survey)
+    file_path = datadir / file_name
+    if file_path.exists():
+        return file_path
+
+    survey_code = "p" if str(survey).strip().lower() == "person" else "h"
+    remote_name = f"csv_{survey_code}{state_key.lower()}.zip"
+    base_url = f"https://www2.census.gov/programs-surveys/acs/data/pums/{int(year)}/{horizon}"
+    payload = _download_bytes(f"{base_url}/{remote_name}")
+    with zipfile.ZipFile(io.BytesIO(payload), mode="r") as zf:
+        zf.extract(file_name, path=datadir)
+    return file_path
+
+
+def _load_selected_acs_columns(*, year: int, horizon: str, survey: str, states: list[str], required_columns: list[str], root_dir: Path) -> pd.DataFrame:
+    dtype_map = {str(col): "float32" for col in required_columns if str(col) != "PINCP"}
+    if "PINCP" in required_columns:
+        dtype_map["PINCP"] = "float64"
+
+    frames: list[pd.DataFrame] = []
+    for state in states:
+        file_path = _ensure_acs_state_file(year=int(year), horizon=horizon, survey=survey, state=state, root_dir=root_dir)
+        chunk_iter = pd.read_csv(
+            file_path,
+            usecols=required_columns,
+            dtype=dtype_map,
+            chunksize=_ACS_CHUNKSIZE,
+            low_memory=True,
+        )
+        for chunk in chunk_iter:
+            frames.append(chunk)
+    if not frames:
+        return pd.DataFrame(columns=required_columns)
+    return pd.concat(frames, ignore_index=True)
+
 
 def _save_sklearn_table(dataset_name: str, output_root: Path) -> Dict[str, object]:
     if fetch_california_housing is None:  # pragma: no cover
@@ -95,25 +155,24 @@ def _save_sklearn_table(dataset_name: str, output_root: Path) -> Dict[str, objec
 
 
 def _save_folktables_table(dataset_name: str, output_root: Path) -> Dict[str, object]:
-    if ACSDataSource is None:  # pragma: no cover
-        raise ImportError(
-            "folktables is required to download ACS regression data. "
-            "Install it with `pip install folktables`."
-        )
-
     spec = get_real_regression_dataset_spec(dataset_name)
     if spec.folktables_year is None:
         raise ValueError(f"Dataset {dataset_name!r} does not define folktables_year")
     if not spec.feature_columns:
         raise ValueError(f"Dataset {dataset_name!r} does not define feature_columns")
 
-    data_source = ACSDataSource(survey_year=str(spec.folktables_year), horizon="1-Year", survey="person")
-    frame = data_source.get_data(states=None, download=True)
     required_columns = list(spec.feature_columns) + [spec.target_column]
+    frame = _load_selected_acs_columns(
+        year=int(spec.folktables_year),
+        horizon="1-Year",
+        survey="person",
+        states=list(_ACS_STATE_LIST),
+        required_columns=required_columns,
+        root_dir=Path(output_root),
+    )
     missing = [col for col in required_columns if col not in frame.columns]
     if missing:
         raise KeyError(f"ACS source data for {dataset_name!r} is missing columns: {missing}")
-    frame = frame.loc[:, required_columns].copy()
 
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
     ensure_parent_dirs([paths.raw_table_path, paths.metadata_path])

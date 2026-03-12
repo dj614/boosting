@@ -196,6 +196,13 @@ def materialize_real_regression_dataset(
         frame, manifest = cached
         return frame.copy(), dict(manifest)
 
+    processed_paths = dataset_processed_paths(dataset_name=dataset_name, root=output_root)
+    manifest = _read_json_if_exists(processed_paths.manifest_path)
+    if processed_paths.cleaned_table_full_path.exists() and manifest:
+        processed_frame = pd.read_csv(processed_paths.cleaned_table_full_path, low_memory=False)
+        _PROCESSED_FRAME_CACHE[cache_key] = (processed_frame.copy(), dict(manifest))
+        return processed_frame, dict(manifest)
+
     raw_frame = _load_raw_frame(dataset_name=dataset_name, raw_root=raw_root)
     processed_frame, manifest = _processed_table_from_raw(dataset_name=dataset_name, raw_frame=raw_frame)
     _PROCESSED_FRAME_CACHE[cache_key] = (processed_frame.copy(), dict(manifest))
@@ -206,16 +213,23 @@ def prepare_real_regression_dataset(
     dataset_name: str,
     raw_root: Path | str = DEFAULT_REAL_REGRESSION_DATA_ROOT,
     output_root: Path | str = DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
+    persist_full_table: bool = False,
 ) -> Path:
     raw_root = Path(raw_root)
     output_root = Path(output_root)
     processed_paths = dataset_processed_paths(dataset_name=dataset_name, root=output_root)
-    ensure_parent_dirs([processed_paths.cleaned_table_path, processed_paths.manifest_path])
+    ensure_parent_dirs([
+        processed_paths.cleaned_table_path,
+        processed_paths.cleaned_table_full_path,
+        processed_paths.manifest_path,
+    ])
     processed_paths.dataset_root.mkdir(parents=True, exist_ok=True)
 
     processed_frame, manifest = materialize_real_regression_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=output_root)
 
     processed_frame.head(_PROCESSED_SAMPLE_ROWS).to_csv(processed_paths.cleaned_table_path, index=False)
+    if bool(persist_full_table):
+        processed_frame.to_csv(processed_paths.cleaned_table_full_path, index=False)
     processed_paths.manifest_path.write_text(
         json.dumps(jsonable_mapping(manifest), indent=2, sort_keys=True),
         encoding="utf-8",

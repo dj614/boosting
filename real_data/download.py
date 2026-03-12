@@ -169,7 +169,7 @@ def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.Data
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
     ensure_parent_dirs([paths.raw_table_path])
     frame.head(_RAW_SAMPLE_ROWS).to_csv(paths.raw_table_path, index=False)
-    _RAW_FRAME_CACHE[_cache_key(dataset_name=dataset_name, output_root=output_root)] = frame.copy()
+    _RAW_FRAME_CACHE[_cache_key(dataset_name=dataset_name, output_root=output_root)] = frame
     return paths.raw_table_path
 
 

@@ -449,7 +449,11 @@ def _ensure_classification_dataset_ready(
     if not raw_paths.dataset_root.exists() or not raw_paths.metadata_path.exists():
         download_real_dataset(dataset_name=dataset_name, output_root=raw_root, overwrite=False)
 
-    needs_prepare = not processed_paths.cleaned_table_path.exists() or not processed_paths.manifest_path.exists()
+    needs_prepare = (
+        not processed_paths.cleaned_table_path.exists()
+        or not processed_paths.cleaned_table_full_path.exists()
+        or not processed_paths.manifest_path.exists()
+    )
     if not needs_prepare:
         try:
             _validate_processed_classification_artifacts(
@@ -458,7 +462,12 @@ def _ensure_classification_dataset_ready(
         except Exception:
             needs_prepare = True
     if needs_prepare:
-        prepare_real_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
+        prepare_real_dataset(
+            dataset_name=dataset_name,
+            raw_root=raw_root,
+            output_root=processed_root,
+            persist_full_table=True,
+        )
         _validate_processed_classification_artifacts(
             dataset_name=dataset_name, raw_root=raw_root, processed_root=processed_root
         )
@@ -516,7 +525,11 @@ def _ensure_regression_dataset_ready(
     if not raw_paths.dataset_root.exists() or not raw_paths.metadata_path.exists():
         download_real_regression_dataset(dataset_name=dataset_name, output_root=raw_root, overwrite=False)
 
-    needs_prepare = not processed_paths.cleaned_table_path.exists() or not processed_paths.manifest_path.exists()
+    needs_prepare = (
+        not processed_paths.cleaned_table_path.exists()
+        or not processed_paths.cleaned_table_full_path.exists()
+        or not processed_paths.manifest_path.exists()
+    )
     if not needs_prepare:
         try:
             _validate_processed_regression_artifacts(
@@ -525,7 +538,12 @@ def _ensure_regression_dataset_ready(
         except Exception:
             needs_prepare = True
     if needs_prepare:
-        prepare_real_regression_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
+        prepare_real_regression_dataset(
+            dataset_name=dataset_name,
+            raw_root=raw_root,
+            output_root=processed_root,
+            persist_full_table=True,
+        )
         _validate_processed_regression_artifacts(
             dataset_name=dataset_name, raw_root=raw_root, processed_root=processed_root
         )

@@ -419,3 +419,130 @@ def _run_family_grid_search(
     best_wrapper.selection_trace_.to_csv(output_dir / "valid_selection_trace.csv", index=False)
 
     best_payload = {
+        **best_config.to_dict(),
+        "task_type": str(task_type),
+        "dataset_name": str(dataset_name),
+        "repeat_id": int(repeat_id),
+        "seed": int(run_seed),
+        "family": str(family),
+        "selected_checkpoint": int(best_wrapper.selected_checkpoint_),
+        "valid_metrics": {k.replace("valid_", ""): v for k, v in best_row.items() if str(k).startswith("valid_")},
+        "test_metrics": {k.replace("test_", ""): v for k, v in best_row.items() if str(k).startswith("test_")},
+    }
+    (output_dir / "best_config.json").write_text(json.dumps(best_payload, indent=2, sort_keys=True), encoding="utf-8")
+    (output_dir / "test_metrics.json").write_text(
+        json.dumps(best_payload["test_metrics"], indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    _make_prediction_frame(
+        task_type=task_type,
+        dataset_name=dataset_name,
+        repeat_id=repeat_id,
+        family=family,
+        split_name="test",
+        selected_checkpoint=int(best_wrapper.selected_checkpoint_),
+        sample_id=dataset.test.sample_id,
+        y_true=dataset.test.y,
+        prediction=best_test_pred,
+    ).to_csv(output_dir / "test_predictions.csv", index=False)
+
+    valid_summary_row = {
+        "task_type": str(task_type),
+        "dataset_name": str(dataset_name),
+        "repeat_id": int(repeat_id),
+        "seed": int(run_seed),
+        "family": str(family),
+        "model_name": best_config.model_name,
+        "selected_checkpoint": int(best_wrapper.selected_checkpoint_),
+        **best_config.to_dict(),
+        **{k: v for k, v in best_row.items() if str(k).startswith("valid_")},
+    }
+    test_summary_row = {
+        **valid_summary_row,
+        **{k: v for k, v in best_row.items() if str(k).startswith("test_")},
+    }
+    return {"valid_summary_row": valid_summary_row, "test_summary_row": test_summary_row}
+
+
+def _predict_for_task(*, task_type: str, wrapper, split) -> np.ndarray:
+    if str(task_type).strip().lower() == "classification":
+        return np.asarray(wrapper.predict_proba(split.X), dtype=float)
+    return np.asarray(wrapper.predict(split.X), dtype=float)
+
+
+def _compute_task_metrics(*, task_type: str, y_true, prediction) -> Dict[str, float]:
+    if str(task_type).strip().lower() == "classification":
+        metrics = compute_binary_classification_metrics(y_true=y_true, y_prob=prediction)
+        return {str(k): float(v) for k, v in metrics.items()}
+    y_true_arr = np.asarray(y_true, dtype=float)
+    pred_arr = np.asarray(prediction, dtype=float)
+    return {
+        "rmse": float(np.sqrt(mean_squared_error(y_true_arr, pred_arr))),
+        "mae": float(mean_absolute_error(y_true_arr, pred_arr)),
+        "r2": float(r2_score(y_true_arr, pred_arr)),
+    }
+
+def _make_prediction_frame(
+    *,
+    task_type: str,
+    dataset_name: str,
+    repeat_id: int,
+    family: str,
+    split_name: str,
+    selected_checkpoint: int,
+    sample_id,
+    y_true,
+    prediction,
+) -> pd.DataFrame:
+    sample_id_arr = np.asarray(sample_id, dtype=object)
+    y_true_arr = np.asarray(y_true)
+    pred_arr = np.asarray(prediction)
+    frame = pd.DataFrame(
+        {
+            "dataset_name": str(dataset_name),
+            "repeat_id": int(repeat_id),
+            "family": str(family),
+            "split": str(split_name),
+            "selected_checkpoint": int(selected_checkpoint),
+            "sample_id": sample_id_arr,
+            "y_true": y_true_arr,
+        }
+    )
+    if str(task_type).strip().lower() == "classification":
+        prob = np.clip(pred_arr.astype(float), 1e-8, 1.0 - 1e-8)
+        frame["y_prob"] = prob
+        frame["y_pred"] = (prob >= 0.5).astype(int)
+        frame["log_loss_i"] = -(y_true_arr.astype(int) * np.log(prob) + (1 - y_true_arr.astype(int)) * np.log(1.0 - prob))
+        frame["brier_i"] = (prob - y_true_arr.astype(int)) ** 2
+        return frame
+    pred = pred_arr.astype(float)
+    frame["y_pred"] = pred
+    frame["residual"] = y_true_arr.astype(float) - pred
+    frame["abs_error"] = np.abs(frame["residual"].to_numpy(dtype=float))
+    return frame
+
+def _resolved_selection_checkpoints(*, max_rounds: int, requested: Sequence[int]) -> List[int]:
+    checkpoints = {int(x) for x in requested if 0 < int(x) <= int(max_rounds)}
+    checkpoints.add(int(max_rounds))
+    return sorted(checkpoints)
+
+
+def _valid_primary_metric_column(task_type: str) -> str:
+    return "valid_log_loss" if str(task_type).strip().lower() == "classification" else "valid_rmse"
+
+
+def _selection_key(*, task_type: str, row: Dict[str, object]) -> Tuple[float, int, int, int]:
+    return (
+        float(row[_valid_primary_metric_column(task_type)]),
+        int(row["selected_checkpoint"]),
+        int(row["max_depth"]),
+        -int(row["min_samples_leaf"]),
+    )
+
+
+def default_classification_datasets() -> List[str]:
+    return list_real_dataset_names()
+
+
+def default_regression_datasets() -> List[str]:
+    return list_real_regression_dataset_names()

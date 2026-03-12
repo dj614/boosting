@@ -1,0 +1,41 @@
+{
+  "dataset_name": "climate",
+  "default_group_rules": [
+    "difficulty_group"
+  ],
+  "n_columns": 21,
+  "n_rows": 540,
+  "notes": "Climate model simulation crashes dataset from OpenML.",
+  "openml_name": "climate-model-simulation-crashes",
+  "openml_version": 1,
+  "positive_label": "1",
+  "raw_columns": [
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6",
+    "V7",
+    "V8",
+    "V9",
+    "V10",
+    "V11",
+    "V12",
+    "V13",
+    "V14",
+    "V15",
+    "V16",
+    "V17",
+    "V18",
+    "V19",
+    "V20",
+    "class"
+  ],
+  "raw_table_is_sample": true,
+  "raw_table_path": "data\\raw\\real\\climate\\raw_table.csv",
+  "raw_table_sample_rows": 5,
+  "source_type": "openml",
+  "target_column": "class",
+  "task_type": "binary_classification"
+}

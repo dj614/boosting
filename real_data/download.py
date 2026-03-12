@@ -42,12 +42,43 @@ def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.Data
     _RAW_FRAME_CACHE[_cache_key(dataset_name=dataset_name, output_root=output_root)] = frame.copy()
     return paths.raw_table_path
 
+def _openml_features_to_frame(data, feature_names) -> pd.DataFrame:
+    if isinstance(data, pd.DataFrame):
+        frame = data.copy()
+    else:
+        matrix = data.toarray() if hasattr(data, "toarray") else data
+        columns = [str(name) for name in (feature_names or [])]
+        frame = pd.DataFrame(matrix, columns=columns or None)
+    frame.columns = [str(col).strip() for col in frame.columns]
+    return frame.reset_index(drop=True)
+
+
+def _openml_target_to_series(target, target_column: str, n_rows: int) -> pd.Series:
+    if isinstance(target, pd.Series):
+        series = target.copy()
+    else:
+        series = pd.Series(target)
+    series = series.reset_index(drop=True)
+    if int(series.shape[0]) != int(n_rows):
+        raise ValueError(
+            f"OpenML target length mismatch for target column {target_column!r}: "
+            f"got {series.shape[0]} rows for {n_rows} feature rows"
+        )
+    series.name = str(target_column)
+    return series
+
 def _save_openml_table(dataset_name: str, output_root: Path) -> Dict[str, object]:
     if fetch_openml is None:  # pragma: no cover
         raise ImportError("scikit-learn fetch_openml is unavailable in this environment")
 
     spec = get_real_dataset_spec(dataset_name)
-    bunch = fetch_openml(name=spec.openml_name, version=spec.openml_version, as_frame=True)
+    bunch = fetch_openml(name=spec.openml_name, version=spec.openml_version, as_frame="auto")
+    frame = _openml_features_to_frame(bunch.data, getattr(bunch, "feature_names", None))
+    frame[spec.target_column] = _openml_target_to_series(
+        bunch.target,
+        target_column=spec.target_column,
+        n_rows=frame.shape[0],
+    )
     frame = bunch.data.copy()
     frame[spec.target_column] = pd.Series(bunch.target)
 

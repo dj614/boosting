@@ -56,6 +56,22 @@ DEFAULT_FAMILIES = ["bagging", "rf", "gbdt", "xgb", "ctb"]
 DEFAULT_SELECTION_CHECKPOINTS = [25, 50, 100, 200, 300]
 
 
+def _task_label(*, task_type: str, dataset_name: str, repeat_id: int) -> str:
+    return f"{str(task_type)}:{str(dataset_name)}/r{int(repeat_id):02d}"
+
+
+def _progress_log(message: str) -> None:
+    print(message, flush=True)
+
+
+def _format_primary_metric(*, task_type: str, row: Dict[str, object]) -> str:
+    metric_name = _valid_primary_metric_column(task_type)
+    metric_value = row.get(metric_name)
+    if metric_value is None:
+        return f"{metric_name}=nan"
+    return f"{metric_name}={float(metric_value):.6f}"
+
+
 def ensure_open_tabular_data_ready(
     *,
     classification_datasets: Sequence[str],
@@ -317,6 +333,7 @@ def run_open_tabular_benchmark(
     regression_split_root: Path = DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
     output_root: Path = Path("outputs/open_tabular_benchmark"),
     n_jobs: int = 1,
+    progress_log_every: int = 0,
 ) -> Dict[str, object]:
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -378,6 +395,7 @@ def run_open_tabular_benchmark(
             "regression_processed_root": str(regression_processed_root),
             "regression_split_root": str(regression_split_root),
             "output_root": str(output_root),
+            "progress_log_every": int(progress_log_every),
         }
         for task_type, dataset_name, repeat_id in all_runs
     ]
@@ -389,12 +407,19 @@ def run_open_tabular_benchmark(
             for task in run_tasks:
                 results.append(_run_open_tabular_single_run(task))
                 outer.update(1)
+                outer.set_postfix_str(
+                    f"last_done={_task_label(task_type=str(task['task_type']), dataset_name=str(task['dataset_name']), repeat_id=int(task['repeat_id']))}"
+                )
         else:
             with make_process_pool(n_jobs) as executor:
-                futures = [executor.submit(_run_open_tabular_single_run, task) for task in run_tasks]
-                for future in as_completed(futures):
+                future_to_task = {executor.submit(_run_open_tabular_single_run, task): task for task in run_tasks}
+                for future in as_completed(future_to_task):
+                    task = future_to_task[future]
                     results.append(future.result())
                     outer.update(1)
+                    outer.set_postfix_str(
+                        f"last_done={_task_label(task_type=str(task['task_type']), dataset_name=str(task['dataset_name']), repeat_id=int(task['repeat_id']))}"
+                    )
 
     summary_test_rows: List[Dict[str, object]] = []
     summary_valid_rows: List[Dict[str, object]] = []
@@ -659,6 +684,13 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
     dataset_output_dir = Path(task["output_root"]) / dataset_name / f"repeat_{int(repeat_id):02d}"
     dataset_output_dir.mkdir(parents=True, exist_ok=True)
 
+    progress_log_every = int(task.get("progress_log_every", 0))
+    if progress_log_every > 0:
+        _progress_log(
+            f"[run:start] {_task_label(task_type=task_type, dataset_name=dataset_name, repeat_id=int(repeat_id))} "
+            f"seed={int(run_seed)} families={','.join(str(x) for x in task['families'])}"
+        )
+
     for family in task["families"]:
         try:
             family_configs = expand_tabular_model_grid(
@@ -688,6 +720,7 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
                 selection_checkpoints=task["selection_checkpoints"],
                 output_dir=dataset_output_dir / str(family),
                 show_progress=False,
+                progress_log_every=progress_log_every,
             )
             summary_test_rows.append(result["test_summary_row"])
             summary_valid_rows.append(result["valid_summary_row"])
@@ -702,6 +735,12 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
                     "error_message": str(exc),
                 }
             )
+
+    if progress_log_every > 0:
+        _progress_log(
+            f"[run:done] {_task_label(task_type=task_type, dataset_name=dataset_name, repeat_id=int(repeat_id))} "
+            f"families_done={len(summary_test_rows)}/{len(task['families'])} errors={len(error_rows)}"
+        )
 
     return {
         "summary_test_rows": summary_test_rows,
@@ -722,6 +761,7 @@ def _run_family_grid_search(
     selection_checkpoints: Sequence[int],
     output_dir: Path,
     show_progress: bool = True,
+    progress_log_every: int = 0,
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: List[Dict[str, object]] = []
@@ -736,8 +776,14 @@ def _run_family_grid_search(
     else:
         bar_context = None
 
+    if progress_log_every > 0:
+        _progress_log(
+            f"[family:start] {_task_label(task_type=task_type, dataset_name=dataset_name, repeat_id=int(repeat_id))} "
+            f"family={str(family)} n_cfg={len(configs)}"
+        )
+
     with bar_context if bar_context is not None else nullcontext() as bar:
-        for config in configs:
+        for config_idx, config in enumerate(configs, start=1):
             wrapper = build_tabular_benchmark_wrapper(config=config, selection_checkpoints=selection_checkpoints)
             wrapper.fit(dataset.train, dataset.valid)
             valid_pred = _predict_for_task(task_type=task_type, wrapper=wrapper, split=dataset.valid)
@@ -764,6 +810,13 @@ def _run_family_grid_search(
                 best_test_pred = np.asarray(test_pred)
             if bar is not None:
                 bar.update(1)
+            if progress_log_every > 0 and (config_idx == 1 or config_idx % progress_log_every == 0 or config_idx == len(configs)):
+                _progress_log(
+                    f"[family:progress] {_task_label(task_type=task_type, dataset_name=dataset_name, repeat_id=int(repeat_id))} "
+                    f"family={str(family)} cfg={config_idx}/{len(configs)} current={config.model_name} "
+                    f"best={best_config.model_name if best_config is not None else 'n/a'} "
+                    f"{_format_primary_metric(task_type=task_type, row=best_row if best_row is not None else row)}"
+                )
 
     if best_row is None or best_config is None or best_wrapper is None or best_test_pred is None:
         raise RuntimeError(f"No successful model fits for dataset={dataset_name!r}, repeat_id={repeat_id}, family={family!r}")
@@ -805,6 +858,12 @@ def _run_family_grid_search(
         **valid_summary_row,
         **{k: v for k, v in best_row.items() if str(k).startswith("test_")},
     }
+    if progress_log_every > 0:
+        _progress_log(
+            f"[family:done] {_task_label(task_type=task_type, dataset_name=dataset_name, repeat_id=int(repeat_id))} "
+            f"family={str(family)} best={best_config.model_name} checkpoint={int(best_wrapper.selected_checkpoint_)} "
+            f"{_format_primary_metric(task_type=task_type, row=best_row)}"
+        )
     return {"valid_summary_row": valid_summary_row, "test_summary_row": test_summary_row}
 
 

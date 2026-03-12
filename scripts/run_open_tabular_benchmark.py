@@ -54,6 +54,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--regression-split-root", type=Path, default=DEFAULT_REAL_REGRESSION_SPLIT_ROOT)
     parser.add_argument("--outdir", type=Path, default=Path("outputs/open_tabular_benchmark"))
     parser.add_argument("--n-jobs", type=int, default=24)
+    parser.add_argument(
+        "--progress-log-every",
+        type=int,
+        default=5,
+        help="If > 0, print per-run / per-family progress logs every N configs inside each family grid search.",
+    )
     return parser.parse_args()
 
 
@@ -88,6 +94,7 @@ def main() -> None:
         regression_split_root=args.regression_split_root,
         output_root=args.outdir,
         n_jobs=args.n_jobs,
+        progress_log_every=args.progress_log_every,
     )
     print(f"[done] summary_test_metrics: {summary['summary_test_metrics_path']}")
     print(f"[done] summary_valid_selection: {summary['summary_valid_selection_path']}")

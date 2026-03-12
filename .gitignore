@@ -85,4 +85,5 @@ data_cache/
 artifacts/
 checkpoints/
 data/processed/
-data/raw
+data/raw/
+data/2018/

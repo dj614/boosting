@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import shutil
 import zipfile
@@ -114,16 +115,18 @@ def _frame_from_openml_bunch(bunch, target_column: str) -> pd.DataFrame:
         return normalized
 
     features = _openml_features_to_frame(bunch.data, getattr(bunch, "feature_names", None))
-    try:
-        target = _openml_target_to_series(
-            bunch.target,
-            target_column=target_column,
-            n_rows=features.shape[0],
-        )
-        features[str(target_column).strip()] = target
-        return features
-    except ValueError:
-        pass
+    target = getattr(bunch, "target", None)
+    if target is not None:
+        try:
+            target_series = _openml_target_to_series(
+                target,
+                target_column=target_column,
+                n_rows=features.shape[0],
+            )
+            features[str(target_column).strip()] = target_series
+            return features
+        except ValueError:
+            pass
 
     resolved_target = _resolve_column_name(features.columns, target_column)
     if resolved_target not in features.columns:
@@ -131,6 +134,35 @@ def _frame_from_openml_bunch(bunch, target_column: str) -> pd.DataFrame:
             f"OpenML target for {target_column!r} was neither returned separately nor present in feature columns"
         )
     return features
+
+
+def _fetch_openml_bunch(*, name: str, version: int | None):
+    if fetch_openml is None:  # pragma: no cover
+        raise ImportError("scikit-learn fetch_openml is unavailable in this environment")
+
+    kwargs = {"name": name, "version": version}
+    signature = inspect.signature(fetch_openml)
+    supports_parser = "parser" in signature.parameters
+
+    attempts: list[dict[str, object]] = []
+    if supports_parser:
+        attempts.append({**kwargs, "as_frame": True, "parser": "auto"})
+        attempts.append({**kwargs, "as_frame": False, "parser": "liac-arff"})
+    else:
+        attempts.append({**kwargs, "as_frame": True})
+        attempts.append({**kwargs, "as_frame": False})
+
+    last_exc: Exception | None = None
+    for params in attempts:
+        try:
+            return fetch_openml(**params)
+        except ValueError as exc:
+            last_exc = exc
+            if "Sparse ARFF datasets cannot be loaded with as_frame=True" not in str(exc):
+                raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"Failed to fetch OpenML dataset {name!r}")
 
 
 def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.DataFrame) -> Path:
@@ -142,11 +174,8 @@ def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.Data
 
 
 def _save_openml_table(dataset_name: str, output_root: Path) -> Dict[str, object]:
-    if fetch_openml is None:  # pragma: no cover
-        raise ImportError("scikit-learn fetch_openml is unavailable in this environment")
-
     spec = get_real_dataset_spec(dataset_name)
-    bunch = fetch_openml(name=spec.openml_name, version=spec.openml_version, as_frame=True)
+    bunch = _fetch_openml_bunch(name=spec.openml_name, version=spec.openml_version)
     frame = _frame_from_openml_bunch(bunch, target_column=spec.target_column)
 
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)

@@ -84,3 +84,5 @@ outputs/
 data_cache/
 artifacts/
 checkpoints/
+data/processed/
+data/raw

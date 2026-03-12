@@ -80,14 +80,18 @@ def _load_raw_frame(dataset_name: str, raw_root: Path) -> pd.DataFrame:
         return pd.read_csv(raw_paths.raw_table_path, low_memory=False)
 
     if spec.source_type == "uci_archive":
-        if not spec.archive_member:
-            raise ValueError(f"Dataset {dataset_name!r} does not define archive_member")
-        member_path = raw_paths.extracted_dir / spec.archive_member
-        if not member_path.exists():
+        metadata = _read_json_if_exists(raw_paths.metadata_path)
+        if not raw_paths.extracted_dir.exists() or len(list(raw_paths.extracted_dir.rglob("*"))) == 0:
             download_real_dataset(dataset_name=dataset_name, output_root=raw_root, overwrite=False)
-        member_path = raw_paths.extracted_dir / spec.archive_member
-        if not member_path.exists():
-            raise FileNotFoundError(f"Archive member not found for {dataset_name!r}: {member_path}")
+            metadata = _read_json_if_exists(raw_paths.metadata_path)
+
+        extracted_members = [str(member) for member in metadata.get("extracted_members", [])]
+        member_path = _resolve_archive_member_path(
+            dataset_name=dataset_name,
+            raw_paths=raw_paths,
+            archive_member=spec.archive_member,
+            extracted_members=extracted_members,
+        )
         if member_path.suffix.lower() in {".xlsx", ".xls"}:
             return pd.read_excel(member_path)
         if member_path.suffix.lower() == ".csv":
@@ -96,6 +100,63 @@ def _load_raw_frame(dataset_name: str, raw_root: Path) -> pd.DataFrame:
 
     raise ValueError(f"Unsupported source_type for {dataset_name!r}: {spec.source_type}")
 
+
+
+
+
+def _resolve_archive_member_path(*, dataset_name: str, raw_paths, archive_member: str | None, extracted_members: list[str]) -> Path:
+    candidates: list[Path] = []
+    if archive_member:
+        candidates.append(raw_paths.extracted_dir / archive_member)
+
+    normalized_requested = str(Path(archive_member).name).strip().lower() if archive_member else ""
+    normalized_stem = str(Path(archive_member).stem).strip().lower() if archive_member else ""
+
+    for member in extracted_members:
+        member_path = raw_paths.extracted_dir / member
+        if member_path.is_dir():
+            continue
+        member_name = member_path.name.strip().lower()
+        member_stem = member_path.stem.strip().lower()
+        if normalized_requested and member_name == normalized_requested:
+            candidates.append(member_path)
+        elif normalized_stem and member_stem == normalized_stem:
+            candidates.append(member_path)
+
+    filesystem_members = sorted(path for path in raw_paths.extracted_dir.rglob("*") if path.is_file())
+    if len(candidates) == 0 and normalized_requested:
+        basename_matches = [path for path in filesystem_members if path.name.strip().lower() == normalized_requested]
+        candidates.extend(basename_matches)
+    if len(candidates) == 0 and normalized_stem:
+        stem_matches = [path for path in filesystem_members if path.stem.strip().lower() == normalized_stem]
+        candidates.extend(stem_matches)
+    if len(candidates) == 0:
+        tabular_files = [path for path in filesystem_members if path.suffix.lower() in {".csv", ".xlsx", ".xls"}]
+        if len(tabular_files) == 1:
+            candidates.extend(tabular_files)
+
+    unique_candidates: list[Path] = []
+    seen = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_candidates.append(path)
+
+    existing = [path for path in unique_candidates if path.exists()]
+    if len(existing) == 1:
+        return existing[0]
+    if len(existing) > 1:
+        raise RuntimeError(
+            f"Multiple archive members matched for {dataset_name!r}: {[str(path) for path in existing]}"
+        )
+
+    requested = archive_member if archive_member else "<unspecified>"
+    raise FileNotFoundError(
+        f"Archive member not found for {dataset_name!r}: requested {requested}; "
+        f"available extracted files: {[str(path.relative_to(raw_paths.extracted_dir)) for path in filesystem_members]}"
+    )
 
 
 def _resolve_column_name(frame: pd.DataFrame, requested: str) -> str:

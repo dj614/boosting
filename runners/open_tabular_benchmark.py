@@ -108,14 +108,40 @@ def _expected_stored_row_count(*, manifest: Dict[str, object], full_n_rows: int)
     return int(full_n_rows)
 
 
+def _series_is_effectively_numeric(series: pd.Series) -> bool:
+    non_missing = series[pd.notna(series)]
+    if non_missing.empty:
+        return True
+    converted = pd.to_numeric(non_missing, errors="coerce")
+    return converted.notna().all()
+
+
+def _normalize_string_series(series: pd.Series) -> pd.Series:
+    normalized = series.astype("string")
+    return normalized.fillna("__NA__").str.strip()
+
+
 def _preview_frame_equals(*, stored_frame: pd.DataFrame, full_frame: pd.DataFrame, n_rows: int) -> bool:
     lhs = stored_frame.head(int(n_rows)).reset_index(drop=True).copy()
     rhs = full_frame.head(int(n_rows)).reset_index(drop=True).copy()
     if lhs.columns.astype(str).tolist() != rhs.columns.astype(str).tolist():
         return False
-    lhs = lhs.where(pd.notna(lhs), other="__NA__").astype(str)
-    rhs = rhs.where(pd.notna(rhs), other="__NA__").astype(str)
-    return lhs.equals(rhs)
+
+    for col in lhs.columns:
+        lhs_col = lhs[col]
+        rhs_col = rhs[col]
+        if _series_is_effectively_numeric(lhs_col) and _series_is_effectively_numeric(rhs_col):
+            lhs_num = pd.to_numeric(lhs_col, errors="coerce")
+            rhs_num = pd.to_numeric(rhs_col, errors="coerce")
+            if not lhs_num.isna().equals(rhs_num.isna()):
+                return False
+            if not np.allclose(lhs_num.fillna(0.0).to_numpy(dtype=float), rhs_num.fillna(0.0).to_numpy(dtype=float), rtol=0.0, atol=0.0):
+                return False
+            continue
+
+        if not _normalize_string_series(lhs_col).equals(_normalize_string_series(rhs_col)):
+            return False
+    return True
 
 
 def _validate_processed_classification_artifacts(*, dataset_name: str, raw_root: Path, processed_root: Path) -> None:

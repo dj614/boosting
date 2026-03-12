@@ -18,8 +18,11 @@ fi
 
 cd "$REPO_DIR"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+export N_JOBS="${N_JOBS:-24}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
 
 WANDB_ENABLE="${WANDB_ENABLE:-0}"
 WANDB_PROJECT="${WANDB_PROJECT:-boosting}"
@@ -153,6 +156,7 @@ run_repo_script scripts/run_instability_matching_benchmark.py \
   --ctb-weight-power "$CTB_WEIGHT_POWER" \
   --ctb-weight-eps "$CTB_WEIGHT_EPS" \
   --ctb-min-samples-leaf "$CTB_MIN_SAMPLES_LEAF" \
+  --n-jobs "$N_JOBS" \
   --save-pointwise \
   --outdir "$OUTDIR"
 

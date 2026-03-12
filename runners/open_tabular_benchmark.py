@@ -1,0 +1,421 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+from progress_utils import progress_bar
+from real_data import (
+    create_real_data_split_manifests,
+    download_real_dataset,
+    load_real_binary_classification_dataset,
+    prepare_real_dataset,
+)
+from real_data.catalog import list_real_dataset_names
+from real_data.schema import (
+    DEFAULT_REAL_DATA_ROOT,
+    DEFAULT_REAL_PROCESSED_ROOT,
+    DEFAULT_REAL_SPLIT_ROOT,
+    dataset_processed_paths as classification_dataset_processed_paths,
+    dataset_raw_paths as classification_dataset_raw_paths,
+    dataset_split_paths as classification_dataset_split_paths,
+)
+from real_regression import (
+    create_real_regression_split_manifests,
+    download_real_regression_dataset,
+    load_real_regression_dataset,
+    prepare_real_regression_dataset,
+)
+from real_regression.catalog import list_real_regression_dataset_names
+from real_regression.schema import (
+    DEFAULT_REAL_REGRESSION_DATA_ROOT,
+    DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
+    DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
+    dataset_processed_paths as regression_dataset_processed_paths,
+    dataset_raw_paths as regression_dataset_raw_paths,
+    dataset_split_paths as regression_dataset_split_paths,
+)
+from sim.grouped_classification_eval import compute_binary_classification_metrics
+from sim.tabular_benchmark_models import (
+    TabularBenchmarkModelConfig,
+    build_tabular_benchmark_wrapper,
+    expand_tabular_model_grid,
+)
+
+
+DEFAULT_FAMILIES = ["bagging", "rf", "gbdt", "xgb", "ctb"]
+DEFAULT_SELECTION_CHECKPOINTS = [25, 50, 100, 200, 300]
+
+
+def ensure_open_tabular_data_ready(
+    *,
+    classification_datasets: Sequence[str],
+    regression_datasets: Sequence[str],
+    n_repeats: int,
+    train_ratio: float,
+    valid_ratio: float,
+    test_ratio: float,
+    base_seed: int,
+    classification_raw_root: Path,
+    classification_processed_root: Path,
+    classification_split_root: Path,
+    regression_raw_root: Path,
+    regression_processed_root: Path,
+    regression_split_root: Path,
+) -> None:
+    for dataset_name in classification_datasets:
+        _ensure_classification_dataset_ready(
+            dataset_name=dataset_name,
+            n_repeats=n_repeats,
+            train_ratio=train_ratio,
+            valid_ratio=valid_ratio,
+            test_ratio=test_ratio,
+            base_seed=base_seed,
+            raw_root=classification_raw_root,
+            processed_root=classification_processed_root,
+            split_root=classification_split_root,
+        )
+    for dataset_name in regression_datasets:
+        _ensure_regression_dataset_ready(
+            dataset_name=dataset_name,
+            n_repeats=n_repeats,
+            train_ratio=train_ratio,
+            valid_ratio=valid_ratio,
+            test_ratio=test_ratio,
+            base_seed=base_seed,
+            raw_root=regression_raw_root,
+            processed_root=regression_processed_root,
+            split_root=regression_split_root,
+        )
+
+
+def run_open_tabular_benchmark(
+    *,
+    classification_datasets: Sequence[str],
+    regression_datasets: Sequence[str],
+    families: Sequence[str] = DEFAULT_FAMILIES,
+    max_rounds: int = 300,
+    selection_checkpoints: Sequence[int] = DEFAULT_SELECTION_CHECKPOINTS,
+    max_depths: Sequence[int] = (1, 3, 5),
+    min_samples_leafs: Sequence[int] = (1, 5),
+    learning_rates: Sequence[float] = (0.03, 0.1),
+    subsamples: Sequence[float] = (0.7, 1.0),
+    colsample_bytree: Sequence[float] = (0.8,),
+    ctb_inner_bootstraps: Sequence[int] = (4, 8),
+    ctb_etas: Sequence[float] = (0.5, 1.0),
+    ctb_instability_penalty: float = 0.0,
+    ctb_weight_power: float = 1.0,
+    ctb_weight_eps: float = 1e-8,
+    n_repeats: int = 5,
+    base_seed: int = 0,
+    train_ratio: float = 0.8,
+    valid_ratio: float = 0.1,
+    test_ratio: float = 0.1,
+    classification_raw_root: Path = DEFAULT_REAL_DATA_ROOT,
+    classification_processed_root: Path = DEFAULT_REAL_PROCESSED_ROOT,
+    classification_split_root: Path = DEFAULT_REAL_SPLIT_ROOT,
+    regression_raw_root: Path = DEFAULT_REAL_REGRESSION_DATA_ROOT,
+    regression_processed_root: Path = DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
+    regression_split_root: Path = DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
+    output_root: Path = Path("outputs/open_tabular_benchmark"),
+) -> Dict[str, object]:
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    selection_checkpoints = _resolved_selection_checkpoints(
+        max_rounds=int(max_rounds),
+        requested=selection_checkpoints,
+    )
+    classification_datasets = list(classification_datasets)
+    regression_datasets = list(regression_datasets)
+    all_runs: List[Tuple[str, str, int]] = [
+        ("classification", dataset_name, repeat_id)
+        for dataset_name in classification_datasets
+        for repeat_id in range(int(n_repeats))
+    ] + [
+        ("regression", dataset_name, repeat_id)
+        for dataset_name in regression_datasets
+        for repeat_id in range(int(n_repeats))
+    ]
+
+    ensure_open_tabular_data_ready(
+        classification_datasets=classification_datasets,
+        regression_datasets=regression_datasets,
+        n_repeats=n_repeats,
+        train_ratio=train_ratio,
+        valid_ratio=valid_ratio,
+        test_ratio=test_ratio,
+        base_seed=base_seed,
+        classification_raw_root=Path(classification_raw_root),
+        classification_processed_root=Path(classification_processed_root),
+        classification_split_root=Path(classification_split_root),
+        regression_raw_root=Path(regression_raw_root),
+        regression_processed_root=Path(regression_processed_root),
+        regression_split_root=Path(regression_split_root),
+    )
+
+    summary_test_rows: List[Dict[str, object]] = []
+    summary_valid_rows: List[Dict[str, object]] = []
+    error_rows: List[Dict[str, object]] = []
+
+    with progress_bar(total=len(all_runs), desc="open-tabular benchmark", unit="run") as outer:
+        for task_type, dataset_name, repeat_id in all_runs:
+            run_seed = int(base_seed) + int(repeat_id)
+            try:
+                dataset = _load_task_dataset(
+                    task_type=task_type,
+                    dataset_name=dataset_name,
+                    repeat_id=repeat_id,
+                    run_seed=run_seed,
+                    classification_processed_root=Path(classification_processed_root),
+                    classification_split_root=Path(classification_split_root),
+                    regression_processed_root=Path(regression_processed_root),
+                    regression_split_root=Path(regression_split_root),
+                )
+            except Exception as exc:
+                error_rows.append(
+                    {
+                        "task_type": task_type,
+                        "dataset_name": dataset_name,
+                        "repeat_id": int(repeat_id),
+                        "family": "__dataset_load__",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    }
+                )
+                outer.update(1)
+                continue
+
+            dataset_output_dir = output_root / dataset_name / f"repeat_{int(repeat_id):02d}"
+            dataset_output_dir.mkdir(parents=True, exist_ok=True)
+
+            for family in families:
+                try:
+                    family_configs = expand_tabular_model_grid(
+                        task_type=task_type,
+                        families=[family],
+                        max_depths=max_depths,
+                        n_estimators=int(max_rounds),
+                        min_samples_leafs=min_samples_leafs,
+                        learning_rates=learning_rates,
+                        subsamples=subsamples,
+                        colsample_bytree=colsample_bytree,
+                        inner_bootstraps=ctb_inner_bootstraps,
+                        etas=ctb_etas,
+                        instability_penalty=float(ctb_instability_penalty),
+                        weight_power=float(ctb_weight_power),
+                        weight_eps=float(ctb_weight_eps),
+                        random_state=run_seed,
+                    )
+                    result = _run_family_grid_search(
+                        task_type=task_type,
+                        dataset_name=dataset_name,
+                        repeat_id=repeat_id,
+                        run_seed=run_seed,
+                        dataset=dataset,
+                        family=str(family),
+                        configs=family_configs,
+                        selection_checkpoints=selection_checkpoints,
+                        output_dir=dataset_output_dir / str(family),
+                    )
+                    summary_test_rows.append(result["test_summary_row"])
+                    summary_valid_rows.append(result["valid_summary_row"])
+                except Exception as exc:
+                    error_rows.append(
+                        {
+                            "task_type": task_type,
+                            "dataset_name": dataset_name,
+                            "repeat_id": int(repeat_id),
+                            "family": str(family),
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        }
+                    )
+            outer.update(1)
+
+    pd.DataFrame(summary_test_rows).to_csv(output_root / "summary_test_metrics.csv", index=False)
+    pd.DataFrame(summary_valid_rows).to_csv(output_root / "summary_valid_selection.csv", index=False)
+    if error_rows:
+        pd.DataFrame(error_rows).to_csv(output_root / "errors.csv", index=False)
+
+    artifact_summary = {
+        "output_root": str(output_root),
+        "classification_datasets": list(classification_datasets),
+        "regression_datasets": list(regression_datasets),
+        "families": [str(x) for x in families],
+        "max_rounds": int(max_rounds),
+        "selection_checkpoints": list(selection_checkpoints),
+        "n_repeats": int(n_repeats),
+        "base_seed": int(base_seed),
+        "n_successful_runs": int(len(summary_test_rows)),
+        "n_errors": int(len(error_rows)),
+        "summary_test_metrics_path": str(output_root / "summary_test_metrics.csv"),
+        "summary_valid_selection_path": str(output_root / "summary_valid_selection.csv"),
+    }
+    (output_root / "artifact_summary.json").write_text(
+        json.dumps(artifact_summary, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return artifact_summary
+
+
+def _ensure_classification_dataset_ready(
+    *,
+    dataset_name: str,
+    n_repeats: int,
+    train_ratio: float,
+    valid_ratio: float,
+    test_ratio: float,
+    base_seed: int,
+    raw_root: Path,
+    processed_root: Path,
+    split_root: Path,
+) -> None:
+    raw_paths = classification_dataset_raw_paths(dataset_name=dataset_name, root=raw_root)
+    processed_paths = classification_dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
+    split_paths = classification_dataset_split_paths(dataset_name=dataset_name, root=split_root)
+
+    if not raw_paths.dataset_root.exists() or not raw_paths.metadata_path.exists():
+        download_real_dataset(dataset_name=dataset_name, output_root=raw_root, overwrite=False)
+    if not processed_paths.cleaned_table_path.exists() or not processed_paths.manifest_path.exists():
+        prepare_real_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
+
+    manifest_paths = [split_paths.split_dir / f"repeat_{int(i):02d}.json" for i in range(int(n_repeats))]
+    if any(not path.exists() for path in manifest_paths):
+        create_real_data_split_manifests(
+            dataset_names=[dataset_name],
+            processed_root=processed_root,
+            output_root=split_root,
+            train_ratio=train_ratio,
+            valid_ratio=valid_ratio,
+            test_ratio=test_ratio,
+            n_repeats=n_repeats,
+            base_seed=base_seed,
+        )
+
+
+def _ensure_regression_dataset_ready(
+    *,
+    dataset_name: str,
+    n_repeats: int,
+    train_ratio: float,
+    valid_ratio: float,
+    test_ratio: float,
+    base_seed: int,
+    raw_root: Path,
+    processed_root: Path,
+    split_root: Path,
+) -> None:
+    raw_paths = regression_dataset_raw_paths(dataset_name=dataset_name, root=raw_root)
+    processed_paths = regression_dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
+    split_paths = regression_dataset_split_paths(dataset_name=dataset_name, root=split_root)
+
+    if not raw_paths.dataset_root.exists() or not raw_paths.metadata_path.exists():
+        download_real_regression_dataset(dataset_name=dataset_name, output_root=raw_root, overwrite=False)
+    if not processed_paths.cleaned_table_path.exists() or not processed_paths.manifest_path.exists():
+        prepare_real_regression_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
+
+    manifest_paths = [split_paths.split_dir / f"repeat_{int(i):02d}.json" for i in range(int(n_repeats))]
+    if any(not path.exists() for path in manifest_paths):
+        create_real_regression_split_manifests(
+            dataset_names=[dataset_name],
+            processed_root=processed_root,
+            output_root=split_root,
+            train_ratio=train_ratio,
+            valid_ratio=valid_ratio,
+            test_ratio=test_ratio,
+            n_repeats=n_repeats,
+            base_seed=base_seed,
+        )
+
+
+def _load_task_dataset(
+    *,
+    task_type: str,
+    dataset_name: str,
+    repeat_id: int,
+    run_seed: int,
+    classification_processed_root: Path,
+    classification_split_root: Path,
+    regression_processed_root: Path,
+    regression_split_root: Path,
+):
+    if str(task_type).strip().lower() == "classification":
+        return load_real_binary_classification_dataset(
+            dataset_name=dataset_name,
+            repeat_id=int(repeat_id),
+            group_definition="auto",
+            processed_root=classification_processed_root,
+            split_root=classification_split_root,
+            random_state=int(run_seed),
+        )
+    if str(task_type).strip().lower() == "regression":
+        return load_real_regression_dataset(
+            dataset_name=dataset_name,
+            repeat_id=int(repeat_id),
+            processed_root=regression_processed_root,
+            split_root=regression_split_root,
+        )
+    raise ValueError(f"Unsupported task_type={task_type!r}")
+
+
+def _run_family_grid_search(
+    *,
+    task_type: str,
+    dataset_name: str,
+    repeat_id: int,
+    run_seed: int,
+    dataset,
+    family: str,
+    configs: Sequence[TabularBenchmarkModelConfig],
+    selection_checkpoints: Sequence[int],
+    output_dir: Path,
+) -> Dict[str, object]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rows: List[Dict[str, object]] = []
+    best_row: Optional[Dict[str, object]] = None
+    best_config: Optional[TabularBenchmarkModelConfig] = None
+    best_wrapper = None
+    best_test_pred: Optional[np.ndarray] = None
+
+    desc = f"{dataset_name}/r{int(repeat_id):02d}/{family}"
+    with progress_bar(total=len(configs), desc=desc, unit="cfg", leave=False) as bar:
+        for config in configs:
+            wrapper = build_tabular_benchmark_wrapper(config=config, selection_checkpoints=selection_checkpoints)
+            wrapper.fit(dataset.train, dataset.valid)
+            valid_pred = _predict_for_task(task_type=task_type, wrapper=wrapper, split=dataset.valid)
+            test_pred = _predict_for_task(task_type=task_type, wrapper=wrapper, split=dataset.test)
+            valid_metrics = _compute_task_metrics(task_type=task_type, y_true=dataset.valid.y, prediction=valid_pred)
+            test_metrics = _compute_task_metrics(task_type=task_type, y_true=dataset.test.y, prediction=test_pred)
+            row = {
+                "task_type": str(task_type),
+                "dataset_name": str(dataset_name),
+                "repeat_id": int(repeat_id),
+                "seed": int(run_seed),
+                "family": str(family),
+                "model_name": config.model_name,
+                "selected_checkpoint": int(wrapper.selected_checkpoint_),
+                **config.to_dict(),
+                **{f"valid_{k}": v for k, v in valid_metrics.items()},
+                **{f"test_{k}": v for k, v in test_metrics.items()},
+            }
+            rows.append(row)
+            if best_row is None or _selection_key(task_type=task_type, row=row) < _selection_key(task_type=task_type, row=best_row):
+                best_row = row
+                best_config = config
+                best_wrapper = wrapper
+                best_test_pred = np.asarray(test_pred)
+            bar.update(1)
+
+    if best_row is None or best_config is None or best_wrapper is None or best_test_pred is None:
+        raise RuntimeError(f"No successful model fits for dataset={dataset_name!r}, repeat_id={repeat_id}, family={family!r}")
+
+    pd.DataFrame(rows).sort_values(
+        by=[_valid_primary_metric_column(task_type), "selected_checkpoint", "max_depth", "min_samples_leaf"]
+    ).reset_index(drop=True).to_csv(output_dir / "grid_search_results.csv", index=False)
+    best_wrapper.selection_trace_.to_csv(output_dir / "valid_selection_trace.csv", index=False)
+
+    best_payload = {

@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         default=5,
         help="If > 0, print per-run / per-family progress logs every N configs inside each family grid search.",
     )
+    parser.add_argument(
+        "--use-report-metric-for-selection",
+        action="store_true",
+        help="Select checkpoints/configs by valid accuracy (classification) or valid mse (regression) instead of the default valid log loss / valid rmse.",
+    )
     return parser.parse_args()
 
 
@@ -95,6 +100,7 @@ def main() -> None:
         output_root=args.outdir,
         n_jobs=args.n_jobs,
         progress_log_every=args.progress_log_every,
+        use_report_metric_for_selection=args.use_report_metric_for_selection,
     )
     print(f"[done] summary_test_metrics: {summary['summary_test_metrics_path']}")
     print(f"[done] summary_valid_selection: {summary['summary_valid_selection_path']}")

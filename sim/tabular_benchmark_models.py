@@ -13,7 +13,7 @@ from sklearn.ensemble import (
     RandomForestClassifier,
     RandomForestRegressor,
 )
-from sklearn.metrics import log_loss
+from sklearn.metrics import accuracy_score, log_loss, mean_squared_error
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from .ctb_core import ConsensusTransportBoosting
@@ -54,11 +54,17 @@ class TabularBenchmarkModelConfig:
 
 
 class TabularBenchmarkWrapper:
-    def __init__(self, config: TabularBenchmarkModelConfig, selection_checkpoints: Sequence[int]) -> None:
+    def __init__(
+        self,
+        config: TabularBenchmarkModelConfig,
+        selection_checkpoints: Sequence[int],
+        use_report_metric_for_selection: bool = False,
+    ) -> None:
         self.config = config
         self.selection_checkpoints = sorted({int(x) for x in selection_checkpoints if int(x) > 0})
         if not self.selection_checkpoints:
             raise ValueError("selection_checkpoints must be non-empty")
+        self.use_report_metric_for_selection = bool(use_report_metric_for_selection)
         self.model = None
         self.selected_checkpoint_: Optional[int] = None
         self.selection_trace_: Optional[pd.DataFrame] = None
@@ -74,15 +80,13 @@ class TabularBenchmarkWrapper:
 
         rows: List[Dict[str, float]] = []
         best_checkpoint = None
-        best_score = None
+        best_metric = None
         for checkpoint in self.selection_checkpoints:
             pred = np.asarray(staged_valid_predictions[int(checkpoint)], dtype=float)
-            current_score = float(self._selection_score(valid_split.y, pred))
-            rows.append({"checkpoint": int(checkpoint), self.selection_metric_name: current_score})
-            if best_score is None or current_score < best_score - 1e-12 or (
-                abs(current_score - best_score) <= 1e-12 and int(checkpoint) < int(best_checkpoint)
-            ):
-                best_score = current_score
+            current_metric = float(self._selection_metric_value(valid_split.y, pred))
+            rows.append({"checkpoint": int(checkpoint), self.selection_metric_name: current_metric})
+            if self._is_better_metric(current_metric=current_metric, best_metric=best_metric, best_checkpoint=best_checkpoint, checkpoint=checkpoint):
+                best_metric = current_metric
                 best_checkpoint = int(checkpoint)
         self.selected_checkpoint_ = int(best_checkpoint)
         self.selection_trace_ = pd.DataFrame(rows)
@@ -92,8 +96,30 @@ class TabularBenchmarkWrapper:
     def selection_metric_name(self) -> str:
         raise NotImplementedError
 
-    def _selection_score(self, y_true: Array, prediction: Array) -> float:
+    @property
+    def selection_metric_higher_is_better(self) -> bool:
+        return False
+
+    def _selection_metric_value(self, y_true: Array, prediction: Array) -> float:
         raise NotImplementedError
+
+    def _is_better_metric(
+        self,
+        *,
+        current_metric: float,
+        best_metric: Optional[float],
+        best_checkpoint: Optional[int],
+        checkpoint: int,
+    ) -> bool:
+        if best_metric is None:
+            return True
+        if self.selection_metric_higher_is_better:
+            return current_metric > best_metric + 1e-12 or (
+                abs(current_metric - best_metric) <= 1e-12 and int(checkpoint) < int(best_checkpoint)
+            )
+        return current_metric < best_metric - 1e-12 or (
+            abs(current_metric - best_metric) <= 1e-12 and int(checkpoint) < int(best_checkpoint)
+        )
 
     def _build_estimator(self):
         raise NotImplementedError
@@ -105,10 +131,20 @@ class TabularBenchmarkWrapper:
 class BinaryTabularBenchmarkWrapper(TabularBenchmarkWrapper):
     @property
     def selection_metric_name(self) -> str:
+        if self.use_report_metric_for_selection:
+            return "valid_accuracy"
         return "valid_log_loss"
 
-    def _selection_score(self, y_true: Array, prediction: Array) -> float:
-        return float(log_loss(np.asarray(y_true, dtype=int), np.clip(prediction, 1e-8, 1.0 - 1e-8), labels=[0, 1]))
+    @property
+    def selection_metric_higher_is_better(self) -> bool:
+        return bool(self.use_report_metric_for_selection)
+
+    def _selection_metric_value(self, y_true: Array, prediction: Array) -> float:
+        y_true_arr = np.asarray(y_true, dtype=int)
+        prob = np.clip(np.asarray(prediction, dtype=float), 1e-8, 1.0 - 1e-8)
+        if self.use_report_metric_for_selection:
+            return float(accuracy_score(y_true_arr, (prob >= 0.5).astype(int)))
+        return float(log_loss(y_true_arr, prob, labels=[0, 1]))
 
     def predict_proba(self, X: Array, checkpoint: Optional[int] = None) -> Array:
         if self.model is None:
@@ -128,12 +164,17 @@ class BinaryTabularBenchmarkWrapper(TabularBenchmarkWrapper):
 class RegressionTabularBenchmarkWrapper(TabularBenchmarkWrapper):
     @property
     def selection_metric_name(self) -> str:
+        if self.use_report_metric_for_selection:
+            return "valid_mse"
         return "valid_rmse"
 
-    def _selection_score(self, y_true: Array, prediction: Array) -> float:
+    def _selection_metric_value(self, y_true: Array, prediction: Array) -> float:
         y_true = np.asarray(y_true, dtype=float)
         prediction = np.asarray(prediction, dtype=float)
-        return float(np.sqrt(np.mean((y_true - prediction) ** 2)))
+        mse = float(mean_squared_error(y_true, prediction))
+        if self.use_report_metric_for_selection:
+            return mse
+        return float(np.sqrt(mse))
 
     def predict(self, X: Array, checkpoint: Optional[int] = None) -> Array:
         if self.model is None:
@@ -373,31 +414,32 @@ class CTBRegressionTabularWrapper(RegressionTabularBenchmarkWrapper):
 def build_tabular_benchmark_wrapper(
     config: TabularBenchmarkModelConfig,
     selection_checkpoints: Sequence[int],
+    use_report_metric_for_selection: bool = False,
 ) -> TabularBenchmarkWrapper:
     task_type = str(config.task_type).strip().lower()
     family = str(config.family).strip().lower()
     if task_type == "classification":
         if family == "bagging":
-            return BaggingBinaryTabularWrapper(config, selection_checkpoints)
+            return BaggingBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
         if family == "rf":
-            return RandomForestBinaryTabularWrapper(config, selection_checkpoints)
+            return RandomForestBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
         if family == "gbdt":
-            return GradientBoostingBinaryTabularWrapper(config, selection_checkpoints)
+            return GradientBoostingBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
         if family == "xgb":
-            return XGBoostBinaryTabularWrapper(config, selection_checkpoints)
+            return XGBoostBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
         if family == "ctb":
-            return CTBBinaryTabularWrapper(config, selection_checkpoints)
+            return CTBBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
     elif task_type == "regression":
         if family == "bagging":
-            return BaggingRegressionTabularWrapper(config, selection_checkpoints)
+            return BaggingRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
         if family == "rf":
-            return RandomForestRegressionTabularWrapper(config, selection_checkpoints)
+            return RandomForestRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
         if family == "gbdt":
-            return GradientBoostingRegressionTabularWrapper(config, selection_checkpoints)
+            return GradientBoostingRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
         if family == "xgb":
-            return XGBoostRegressionTabularWrapper(config, selection_checkpoints)
+            return XGBoostRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
         if family == "ctb":
-            return CTBRegressionTabularWrapper(config, selection_checkpoints)
+            return CTBRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
     raise ValueError(f"Unsupported task_type={task_type!r} family={family!r}")
 
 

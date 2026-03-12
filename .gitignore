@@ -72,6 +72,7 @@ temp/
 # These scripts write results under outputs/
 # =========================
 outputs/
+!outputs/*.md
 
 # If you want to keep the directory itself in git, uncomment these two lines:
 #!outputs/

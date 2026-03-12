@@ -9,10 +9,11 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from .catalog import get_real_regression_dataset_spec, list_real_regression_dataset_names
+from .preprocess import materialize_real_regression_dataset
 from .schema import (
+    DEFAULT_REAL_REGRESSION_DATA_ROOT,
     DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
     DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
-    dataset_processed_paths,
     dataset_split_paths,
     jsonable_mapping,
 )
@@ -22,12 +23,8 @@ Array = np.ndarray
 
 
 def _read_cleaned_table(dataset_name: str, processed_root: Path) -> pd.DataFrame:
-    processed_paths = dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
-    if not processed_paths.cleaned_table_path.exists():
-        raise FileNotFoundError(
-            f"Cleaned table not found for {dataset_name!r}: {processed_paths.cleaned_table_path}"
-        )
-    return pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
+    frame, _ = materialize_real_regression_dataset(dataset_name=dataset_name, raw_root=DEFAULT_REAL_REGRESSION_DATA_ROOT, output_root=processed_root)
+    return frame
 
 
 def _quantile_bin_labels(y: Array, max_bins: int = 10, max_classes: Optional[int] = None) -> Optional[Array]:
@@ -87,6 +84,7 @@ def _split_indices(
 def create_real_regression_split_manifest(
     dataset_name: str,
     repeat_id: int,
+    raw_root: Path | str = DEFAULT_REAL_REGRESSION_DATA_ROOT,
     processed_root: Path | str = DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
     output_root: Path | str = DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
     train_ratio: float = 0.8,
@@ -95,7 +93,7 @@ def create_real_regression_split_manifest(
     seed: int = 0,
 ) -> Path:
     spec = get_real_regression_dataset_spec(dataset_name)
-    frame = _read_cleaned_table(dataset_name=dataset_name, processed_root=Path(processed_root))
+    frame, _ = materialize_real_regression_dataset(dataset_name=dataset_name, raw_root=Path(raw_root), output_root=Path(processed_root))
     y = frame["__target__"].to_numpy(dtype=float)
     train_idx, valid_idx, test_idx = _split_indices(
         y=y,
@@ -150,6 +148,7 @@ def create_real_regression_split_manifest(
 
 def create_real_regression_split_manifests(
     dataset_names: Optional[list[str]] = None,
+    raw_root: Path | str = DEFAULT_REAL_REGRESSION_DATA_ROOT,
     processed_root: Path | str = DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
     output_root: Path | str = DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
     train_ratio: float = 0.8,
@@ -166,6 +165,7 @@ def create_real_regression_split_manifests(
             manifest_path = create_real_regression_split_manifest(
                 dataset_name=dataset_name,
                 repeat_id=repeat_id,
+                raw_root=raw_root,
                 processed_root=processed_root,
                 output_root=output_root,
                 train_ratio=train_ratio,

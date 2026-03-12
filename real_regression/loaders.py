@@ -9,11 +9,12 @@ import pandas as pd
 
 from data.types import TabularRegressionDataset, TabularRegressionSplit
 from sim.grouped_classification_data import _build_preprocessor, _feature_names_from_preprocessor
+from .preprocess import materialize_real_regression_dataset
 
 from .schema import (
+    DEFAULT_REAL_REGRESSION_DATA_ROOT,
     DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
     DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
-    dataset_processed_paths,
     dataset_split_paths,
 )
 
@@ -58,20 +59,9 @@ def _make_split(
     )
 
 
-def _load_cleaned_table(dataset_name: str, processed_root: Path) -> tuple[pd.DataFrame, Dict[str, object]]:
-    processed_paths = dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
-    if not processed_paths.cleaned_table_path.exists():
-        raise FileNotFoundError(
-            f"Cleaned table not found for {dataset_name!r}: {processed_paths.cleaned_table_path}"
-        )
-    if not processed_paths.manifest_path.exists():
-        raise FileNotFoundError(
-            f"Processed manifest not found for {dataset_name!r}: {processed_paths.manifest_path}"
-        )
-    frame = pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
-    manifest = _read_json(processed_paths.manifest_path)
-    return frame, manifest
-
+def _load_cleaned_table(dataset_name: str, processed_root: Path, raw_root: Path) -> tuple[pd.DataFrame, Dict[str, object]]:
+    return materialize_real_regression_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
+ 
 
 def _load_split_manifest(dataset_name: str, repeat_id: int, split_root: Path) -> Dict[str, object]:
     split_paths = dataset_split_paths(dataset_name=dataset_name, root=split_root)
@@ -84,12 +74,13 @@ def _load_split_manifest(dataset_name: str, repeat_id: int, split_root: Path) ->
 def load_real_regression_dataset(
     dataset_name: str,
     repeat_id: int = 0,
+    raw_root: Path | str = DEFAULT_REAL_REGRESSION_DATA_ROOT,
     processed_root: Path | str = DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
     split_root: Path | str = DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
 ) -> TabularRegressionDataset:
     processed_root = Path(processed_root)
     split_root = Path(split_root)
-    frame, processed_manifest = _load_cleaned_table(dataset_name=dataset_name, processed_root=processed_root)
+    frame, processed_manifest = _load_cleaned_table(dataset_name=dataset_name, processed_root=processed_root, raw_root=Path(raw_root))
     split_manifest = _load_split_manifest(dataset_name=dataset_name, repeat_id=repeat_id, split_root=split_root)
 
     train_idx = np.asarray(split_manifest["train_idx"], dtype=int)

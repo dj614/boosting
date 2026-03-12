@@ -290,8 +290,10 @@ def run_open_tabular_benchmark(
                     dataset_name=dataset_name,
                     repeat_id=repeat_id,
                     run_seed=run_seed,
+                    classification_raw_root=Path(classification_raw_root),
                     classification_processed_root=Path(classification_processed_root),
                     classification_split_root=Path(classification_split_root),
+                    regression_raw_root=Path(regression_raw_root),
                     regression_processed_root=Path(regression_processed_root),
                     regression_split_root=Path(regression_split_root),
                 )
@@ -426,6 +428,7 @@ def _ensure_classification_dataset_ready(
     if needs_splits:
         create_real_data_split_manifests(
             dataset_names=[dataset_name],
+            raw_root=raw_root,
             processed_root=processed_root,
             output_root=split_root,
             train_ratio=train_ratio,
@@ -486,6 +489,7 @@ def _ensure_regression_dataset_ready(
     if needs_splits:
         create_real_regression_split_manifests(
             dataset_names=[dataset_name],
+            raw_root=raw_root,
             processed_root=processed_root,
             output_root=split_root,
             train_ratio=train_ratio,
@@ -508,8 +512,10 @@ def _load_task_dataset(
     dataset_name: str,
     repeat_id: int,
     run_seed: int,
+    classification_raw_root: Path,
     classification_processed_root: Path,
     classification_split_root: Path,
+    regression_raw_root: Path,
     regression_processed_root: Path,
     regression_split_root: Path,
 ):
@@ -518,6 +524,7 @@ def _load_task_dataset(
             dataset_name=dataset_name,
             repeat_id=int(repeat_id),
             group_definition="auto",
+            raw_root=classification_raw_root,
             processed_root=classification_processed_root,
             split_root=classification_split_root,
             random_state=int(run_seed),
@@ -526,6 +533,7 @@ def _load_task_dataset(
         return load_real_regression_dataset(
             dataset_name=dataset_name,
             repeat_id=int(repeat_id),
+            raw_root=regression_raw_root,
             processed_root=regression_processed_root,
             split_root=regression_split_root,
         )
@@ -604,17 +612,6 @@ def _run_family_grid_search(
         json.dumps(best_payload["test_metrics"], indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    _make_prediction_frame(
-        task_type=task_type,
-        dataset_name=dataset_name,
-        repeat_id=repeat_id,
-        family=family,
-        split_name="test",
-        selected_checkpoint=int(best_wrapper.selected_checkpoint_),
-        sample_id=dataset.test.sample_id,
-        y_true=dataset.test.y,
-        prediction=best_test_pred,
-    ).to_csv(output_dir / "test_predictions.csv", index=False)
 
     valid_summary_row = {
         "task_type": str(task_type),

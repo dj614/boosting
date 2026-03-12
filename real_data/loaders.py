@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from .catalog import get_real_dataset_spec
-from .schema import DEFAULT_REAL_PROCESSED_ROOT, DEFAULT_REAL_SPLIT_ROOT, dataset_processed_paths, dataset_split_paths
+from .preprocess import materialize_real_dataset
+from .schema import DEFAULT_REAL_DATA_ROOT, DEFAULT_REAL_PROCESSED_ROOT, DEFAULT_REAL_SPLIT_ROOT, dataset_split_paths
 from sim.grouped_classification_data import (
     BinaryClassificationDataset,
     _build_preprocessor,
@@ -47,19 +48,8 @@ def _coerce_categorical_columns(frame: pd.DataFrame, categorical_columns) -> pd.
     return out
 
 
-def _load_cleaned_table(dataset_name: str, processed_root: Path) -> tuple[pd.DataFrame, Dict[str, object]]:
-    processed_paths = dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
-    if not processed_paths.cleaned_table_path.exists():
-        raise FileNotFoundError(
-            f"Cleaned table not found for {dataset_name!r}: {processed_paths.cleaned_table_path}"
-        )
-    if not processed_paths.manifest_path.exists():
-        raise FileNotFoundError(
-            f"Processed manifest not found for {dataset_name!r}: {processed_paths.manifest_path}"
-        )
-    frame = pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
-    manifest = _read_json(processed_paths.manifest_path)
-    return frame, manifest
+def _load_cleaned_table(dataset_name: str, processed_root: Path, raw_root: Path) -> tuple[pd.DataFrame, Dict[str, object]]:
+    return materialize_real_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root) 
 
 
 def _load_split_manifest(dataset_name: str, repeat_id: int, split_root: Path) -> Dict[str, object]:
@@ -177,6 +167,7 @@ def load_real_binary_classification_dataset(
     dataset_name: str,
     repeat_id: int = 0,
     group_definition: str = "auto",
+    raw_root: Path | str = DEFAULT_REAL_DATA_ROOT,
     processed_root: Path | str = DEFAULT_REAL_PROCESSED_ROOT,
     split_root: Path | str = DEFAULT_REAL_SPLIT_ROOT,
     random_state: int = 0,
@@ -184,7 +175,7 @@ def load_real_binary_classification_dataset(
     processed_root = Path(processed_root)
     split_root = Path(split_root)
 
-    frame, processed_manifest = _load_cleaned_table(dataset_name=dataset_name, processed_root=processed_root)
+    frame, processed_manifest = _load_cleaned_table(dataset_name=dataset_name, processed_root=processed_root, raw_root=Path(raw_root))
     split_manifest = _load_split_manifest(dataset_name=dataset_name, repeat_id=repeat_id, split_root=split_root)
 
     if "__sample_id__" not in frame.columns or "__target__" not in frame.columns:

@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .catalog import get_real_regression_dataset_spec, list_real_regression_dataset_names
+from .download import download_real_regression_dataset, get_cached_raw_frame
 from .schema import (
     DEFAULT_REAL_REGRESSION_DATA_ROOT,
     DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
@@ -19,7 +20,12 @@ from .schema import (
 
 
 _MISSING_TOKENS = {"", "?", "na", "n/a", "none", "null", "nan"}
+_PROCESSED_SAMPLE_ROWS = 5
+_PROCESSED_FRAME_CACHE: Dict[tuple[str, str, str], tuple[pd.DataFrame, Dict[str, object]]] = {}
 
+
+def _processed_cache_key(dataset_name: str, raw_root: Path, output_root: Path) -> tuple[str, str, str]:
+    return str(dataset_name), str(Path(raw_root).resolve()), str(Path(output_root).resolve())
 
 
 def _strip_and_standardize_missing(frame: pd.DataFrame) -> pd.DataFrame:
@@ -36,9 +42,15 @@ def _strip_and_standardize_missing(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_raw_frame(dataset_name: str, raw_root: Path) -> pd.DataFrame:
+    cached = get_cached_raw_frame(dataset_name=dataset_name, output_root=raw_root)
+    if cached is not None:
+        return cached
     raw_paths = dataset_raw_paths(dataset_name=dataset_name, root=raw_root)
     if raw_paths.raw_table_path is None or not raw_paths.raw_table_path.exists():
-        raise FileNotFoundError(f"Raw table not found for {dataset_name!r}: {raw_paths.raw_table_path}")
+        download_real_regression_dataset(dataset_name=dataset_name, output_root=raw_root, overwrite=False)
+        cached = get_cached_raw_frame(dataset_name=dataset_name, output_root=raw_root)
+        if cached is not None:
+            return cached
     return pd.read_csv(raw_paths.raw_table_path, low_memory=False)
 
 
@@ -135,10 +147,30 @@ def _processed_table_from_raw(dataset_name: str, raw_frame: pd.DataFrame) -> tup
             "min": float(processed["__target__"].min()),
             "max": float(processed["__target__"].max()),
         },
+        "stored_cleaned_sample_rows": int(min(_PROCESSED_SAMPLE_ROWS, processed.shape[0])),
+        "cleaned_table_is_sample": True,
         "notes": spec.notes,
     }
     return processed, manifest
 
+
+def materialize_real_regression_dataset(
+    dataset_name: str,
+    raw_root: Path | str = DEFAULT_REAL_REGRESSION_DATA_ROOT,
+    output_root: Path | str = DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
+) -> tuple[pd.DataFrame, Dict[str, object]]:
+    raw_root = Path(raw_root)
+    output_root = Path(output_root)
+    cache_key = _processed_cache_key(dataset_name=dataset_name, raw_root=raw_root, output_root=output_root)
+    cached = _PROCESSED_FRAME_CACHE.get(cache_key)
+    if cached is not None:
+        frame, manifest = cached
+        return frame.copy(), dict(manifest)
+
+    raw_frame = _load_raw_frame(dataset_name=dataset_name, raw_root=raw_root)
+    processed_frame, manifest = _processed_table_from_raw(dataset_name=dataset_name, raw_frame=raw_frame)
+    _PROCESSED_FRAME_CACHE[cache_key] = (processed_frame.copy(), dict(manifest))
+    return processed_frame, manifest
 
 
 def prepare_real_regression_dataset(
@@ -152,10 +184,9 @@ def prepare_real_regression_dataset(
     ensure_parent_dirs([processed_paths.cleaned_table_path, processed_paths.manifest_path])
     processed_paths.dataset_root.mkdir(parents=True, exist_ok=True)
 
-    raw_frame = _load_raw_frame(dataset_name=dataset_name, raw_root=raw_root)
-    processed_frame, manifest = _processed_table_from_raw(dataset_name=dataset_name, raw_frame=raw_frame)
+    processed_frame, manifest = materialize_real_regression_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=output_root)
 
-    processed_frame.to_csv(processed_paths.cleaned_table_path, index=False)
+    processed_frame.head(_PROCESSED_SAMPLE_ROWS).to_csv(processed_paths.cleaned_table_path, index=False)
     processed_paths.manifest_path.write_text(
         json.dumps(jsonable_mapping(manifest), indent=2, sort_keys=True),
         encoding="utf-8",

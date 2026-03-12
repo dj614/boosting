@@ -5,25 +5,21 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
-import pandas as pd
 
 from .catalog import list_real_dataset_names
+from .preprocess import materialize_real_dataset
 from .schema import (
+    DEFAULT_REAL_DATA_ROOT,
     DEFAULT_REAL_PROCESSED_ROOT,
     DEFAULT_REAL_SPLIT_ROOT,
-    dataset_processed_paths,
     dataset_split_paths,
     jsonable_mapping,
 )
 
 
-def _load_cleaned_table(dataset_name: str, processed_root: Path) -> pd.DataFrame:
-    processed_paths = dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
-    if not processed_paths.cleaned_table_path.exists():
-        raise FileNotFoundError(
-            f"Cleaned table not found for {dataset_name!r}: {processed_paths.cleaned_table_path}"
-        )
-    return pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
+def _load_cleaned_table(dataset_name: str, processed_root: Path, raw_root: Path):
+    frame, _ = materialize_real_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
+    return frame
 
 
 def _normalize_ratios(train_ratio: float, valid_ratio: float, test_ratio: float) -> tuple[float, float, float]:
@@ -124,6 +120,7 @@ def _has_both_classes(y: np.ndarray, indices: np.ndarray) -> bool:
 def create_real_data_split_manifest(
     dataset_name: str,
     repeat_id: int,
+    raw_root: Path | str = DEFAULT_REAL_DATA_ROOT,
     processed_root: Path | str = DEFAULT_REAL_PROCESSED_ROOT,
     output_root: Path | str = DEFAULT_REAL_SPLIT_ROOT,
     train_ratio: float = 0.8,
@@ -133,7 +130,8 @@ def create_real_data_split_manifest(
 ) -> Path:
     processed_root = Path(processed_root)
     output_root = Path(output_root)
-    frame = _load_cleaned_table(dataset_name=dataset_name, processed_root=processed_root)
+    raw_root = Path(raw_root)
+    frame = _load_cleaned_table(dataset_name=dataset_name, processed_root=processed_root, raw_root=raw_root)
 
     if "__target__" not in frame.columns:
         raise KeyError(f"Cleaned table for {dataset_name!r} must contain '__target__'")
@@ -196,6 +194,7 @@ def create_real_data_split_manifest(
 
 def create_real_data_split_manifests(
     dataset_names: Optional[list[str]] = None,
+    raw_root: Path | str = DEFAULT_REAL_DATA_ROOT,
     processed_root: Path | str = DEFAULT_REAL_PROCESSED_ROOT,
     output_root: Path | str = DEFAULT_REAL_SPLIT_ROOT,
     train_ratio: float = 0.8,
@@ -212,6 +211,7 @@ def create_real_data_split_manifests(
             manifest_path = create_real_data_split_manifest(
                 dataset_name=dataset_name,
                 repeat_id=repeat_id,
+                raw_root=raw_root,
                 processed_root=processed_root,
                 output_root=output_root,
                 train_ratio=train_ratio,

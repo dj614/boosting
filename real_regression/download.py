@@ -38,11 +38,30 @@ _UCI_ARCHIVE_MEMBERS = {
     464: "train.csv",
 }
 
+_RAW_SAMPLE_ROWS = 5
+_RAW_FRAME_CACHE: Dict[tuple[str, str], pd.DataFrame] = {}
+
+
+def _cache_key(dataset_name: str, output_root: Path) -> tuple[str, str]:
+    return str(dataset_name), str(Path(output_root).resolve())
+
+
+def get_cached_raw_frame(dataset_name: str, output_root: Path | str = DEFAULT_REAL_REGRESSION_DATA_ROOT) -> Optional[pd.DataFrame]:
+    frame = _RAW_FRAME_CACHE.get(_cache_key(dataset_name=dataset_name, output_root=Path(output_root)))
+    if frame is None:
+        return None
+    return frame.copy()
 
 def _download_bytes(url: str) -> bytes:
     with urlopen(url) as response:  # nosec - downloading known public datasets
         return response.read()
 
+def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.DataFrame) -> Path:
+    paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
+    ensure_parent_dirs([paths.raw_table_path])
+    frame.head(_RAW_SAMPLE_ROWS).to_csv(paths.raw_table_path, index=False)
+    _RAW_FRAME_CACHE[_cache_key(dataset_name=dataset_name, output_root=output_root)] = frame.copy()
+    return paths.raw_table_path
 
 def _save_sklearn_table(dataset_name: str, output_root: Path) -> Dict[str, object]:
     if fetch_california_housing is None:  # pragma: no cover
@@ -56,7 +75,7 @@ def _save_sklearn_table(dataset_name: str, output_root: Path) -> Dict[str, objec
     frame = bunch.frame.copy()
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
     ensure_parent_dirs([paths.raw_table_path, paths.metadata_path])
-    frame.to_csv(paths.raw_table_path, index=False)
+    sample_path = _write_raw_table_sample(dataset_name=dataset_name, output_root=output_root, frame=frame)
 
     metadata = {
         "dataset_name": spec.canonical_name,
@@ -64,7 +83,9 @@ def _save_sklearn_table(dataset_name: str, output_root: Path) -> Dict[str, objec
         "source_type": spec.source_type,
         "target_column": spec.target_column,
         "sklearn_dataset_name": spec.sklearn_dataset_name,
-        "raw_table_path": str(paths.raw_table_path),
+        "raw_table_path": str(sample_path),
+        "raw_table_is_sample": True,
+        "raw_table_sample_rows": int(min(_RAW_SAMPLE_ROWS, frame.shape[0])),
         "n_rows": int(frame.shape[0]),
         "n_columns": int(frame.shape[1]),
         "raw_columns": frame.columns.astype(str).tolist(),
@@ -96,7 +117,7 @@ def _save_folktables_table(dataset_name: str, output_root: Path) -> Dict[str, ob
 
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
     ensure_parent_dirs([paths.raw_table_path, paths.metadata_path])
-    frame.to_csv(paths.raw_table_path, index=False)
+    sample_path = _write_raw_table_sample(dataset_name=dataset_name, output_root=output_root, frame=frame)
 
     metadata = {
         "dataset_name": spec.canonical_name,
@@ -107,7 +128,9 @@ def _save_folktables_table(dataset_name: str, output_root: Path) -> Dict[str, ob
         "folktables_year": spec.folktables_year,
         "feature_columns": list(spec.feature_columns),
         "categorical_columns": list(spec.categorical_columns),
-        "raw_table_path": str(paths.raw_table_path),
+        "raw_table_path": str(sample_path),
+        "raw_table_is_sample": True,
+        "raw_table_sample_rows": int(min(_RAW_SAMPLE_ROWS, frame.shape[0])),
         "n_rows": int(frame.shape[0]),
         "n_columns": int(frame.shape[1]),
         "raw_columns": frame.columns.astype(str).tolist(),
@@ -157,8 +180,7 @@ def _save_uci_archive(dataset_name: str, output_root: Path) -> Dict[str, object]
     else:  # pragma: no cover
         raise ValueError(f"Unsupported archive member suffix for {dataset_name!r}: {member_path.suffix}")
 
-    ensure_parent_dirs([paths.raw_table_path])
-    frame.to_csv(paths.raw_table_path, index=False)
+    sample_path = _write_raw_table_sample(dataset_name=dataset_name, output_root=output_root, frame=frame)
 
     metadata = {
         "dataset_name": spec.canonical_name,
@@ -168,7 +190,9 @@ def _save_uci_archive(dataset_name: str, output_root: Path) -> Dict[str, object]
         "uci_dataset_id": spec.uci_dataset_id,
         "raw_archive_path": str(archive_path),
         "archive_member": archive_member,
-        "raw_table_path": str(paths.raw_table_path),
+        "raw_table_path": str(sample_path),
+        "raw_table_is_sample": True,
+        "raw_table_sample_rows": int(min(_RAW_SAMPLE_ROWS, frame.shape[0])),
         "extracted_dir": str(paths.extracted_dir),
         "extracted_members": extracted_members,
         "n_rows": int(frame.shape[0]),
@@ -191,13 +215,15 @@ def _save_manual_dataset(dataset_name: str, output_root: Path) -> Dict[str, obje
     else:  # pragma: no cover
         raise ValueError(f"Unsupported manual regression dataset: {dataset_name!r}")
 
-    frame.to_csv(paths.raw_table_path, index=False)
+    sample_path = _write_raw_table_sample(dataset_name=dataset_name, output_root=output_root, frame=frame)
     metadata = {
         "dataset_name": spec.canonical_name,
         "task_type": spec.task_type,
         "source_type": spec.source_type,
         "target_column": spec.target_column,
-        "raw_table_path": str(paths.raw_table_path),
+        "raw_table_path": str(sample_path),
+        "raw_table_is_sample": True,
+        "raw_table_sample_rows": int(min(_RAW_SAMPLE_ROWS, frame.shape[0])),
         "n_rows": int(frame.shape[0]),
         "n_columns": int(frame.shape[1]),
         "raw_columns": frame.columns.astype(str).tolist(),

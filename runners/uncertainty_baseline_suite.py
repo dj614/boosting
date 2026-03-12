@@ -104,8 +104,8 @@ def _run_prediction_track(
     pd.DataFrame([summary]).to_csv(output_dir / "summary.csv", index=False)
     with (output_dir / "summary.json").open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
-    pd.concat(pointwise_rows, ignore_index=True).to_csv(output_dir / "test_predictions.csv", index=False)
-    save_prediction_interval_width_plot(pd.concat(pointwise_rows, ignore_index=True), output_dir / "prediction_interval_width.pdf")
+    pointwise_df = pd.concat(pointwise_rows, ignore_index=True)
+    save_prediction_interval_width_plot(pointwise_df, output_dir / "prediction_interval_width.pdf")
     return {
         "model_name": model_name,
         "n_runs": len(rows),

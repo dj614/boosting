@@ -1,0 +1,72 @@
+{
+  "categorical_columns": [],
+  "class_balance": {
+    "negative_rate": 0.5550724637681159,
+    "positive_rate": 0.4449275362318841
+  },
+  "cleaned_table_is_sample": true,
+  "dataset_name": "credit",
+  "default_group_rules": [
+    "difficulty_group"
+  ],
+  "feature_columns": [
+    "X1",
+    "X2",
+    "X3",
+    "X4",
+    "X5",
+    "X6",
+    "X7",
+    "X8",
+    "X9",
+    "X10",
+    "X11",
+    "X12",
+    "X13",
+    "X14"
+  ],
+  "missing_per_column": {},
+  "n_columns": 16,
+  "n_feature_columns": 14,
+  "n_rows": 690,
+  "notes": "Australian Credit Approval dataset from OpenML.",
+  "numeric_columns": [
+    "X1",
+    "X2",
+    "X3",
+    "X4",
+    "X5",
+    "X6",
+    "X7",
+    "X8",
+    "X9",
+    "X10",
+    "X11",
+    "X12",
+    "X13",
+    "X14"
+  ],
+  "positive_aliases": [
+    "1",
+    "+",
+    "positive",
+    "true",
+    "yes"
+  ],
+  "positive_label": "1",
+  "processed_target_column": "__target__",
+  "raw_target_column": "A15",
+  "resolved_raw_target_column": "A15",
+  "sample_id_column": "__sample_id__",
+  "source_type": "openml",
+  "stored_cleaned_sample_rows": 5,
+  "target_mapping": {
+    "observed_labels": [
+      "-1",
+      "1"
+    ],
+    "observed_negative_label": "-1",
+    "observed_positive_label": "1"
+  },
+  "task_type": "binary_classification"
+}

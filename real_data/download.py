@@ -37,22 +37,63 @@ def _download_bytes(url: str) -> bytes:
         return response.read()
 
 
+def _normalize_openml_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy()
+    out.columns = [str(col).strip() for col in out.columns]
+    return out.reset_index(drop=True)
+
+
+def _resolve_column_name(columns, requested: str) -> str:
+    requested_stripped = str(requested).strip()
+    normalized = {str(col).strip().lower(): str(col).strip() for col in list(columns)}
+    if requested_stripped in normalized.values():
+        return requested_stripped
+    key = requested_stripped.lower()
+    if key in normalized:
+        return normalized[key]
+    raise KeyError(
+        f"Column {requested!r} not found in OpenML frame. Available columns: {list(normalized.values())}"
+    )
+
+
 def _openml_features_to_frame(data, feature_names) -> pd.DataFrame:
     if isinstance(data, pd.DataFrame):
-        frame = data.copy()
-    else:
-        matrix = data.toarray() if hasattr(data, "toarray") else data
-        columns = [str(name).strip() for name in (feature_names or [])]
-        frame = pd.DataFrame(matrix, columns=columns or None)
-    frame.columns = [str(col).strip() for col in frame.columns]
-    return frame.reset_index(drop=True)
+        return _normalize_openml_columns(data)
+
+    matrix = data.toarray() if hasattr(data, "toarray") else data
+    columns = [str(name).strip() for name in (feature_names or [])]
+    frame = pd.DataFrame(matrix, columns=columns or None)
+    return _normalize_openml_columns(frame)
 
 
 def _openml_target_to_series(target, target_column: str, n_rows: int) -> pd.Series:
-    if isinstance(target, pd.Series):
+    if isinstance(target, pd.DataFrame):
+        if target.shape[1] == 0:
+            series = pd.Series(dtype="object")
+        elif target.shape[1] == 1:
+            series = target.iloc[:, 0].copy()
+        else:
+            raise ValueError(
+                f"OpenML target for {target_column!r} has {target.shape[1]} columns; only single-target datasets are supported"
+            )
+    elif isinstance(target, pd.Series):
         series = target.copy()
     else:
-        series = pd.Series(target)
+        arr = target.toarray() if hasattr(target, "toarray") else target
+        if hasattr(arr, "shape") and len(getattr(arr, "shape", ())) == 2:
+            if arr.shape[0] == 0 or arr.shape[1] == 0:
+                series = pd.Series(dtype="object")
+            elif arr.shape[1] == 1:
+                series = pd.Series(arr[:, 0])
+            elif arr.shape[0] == 1:
+                series = pd.Series(arr.reshape(-1))
+            else:
+                raise ValueError(
+                    f"OpenML target for {target_column!r} has unsupported 2D shape {arr.shape}; only single-target datasets are supported"
+                )
+        else:
+            series = pd.Series(arr)
+
     series = series.reset_index(drop=True)
     if int(series.shape[0]) != int(n_rows):
         raise ValueError(
@@ -61,6 +102,35 @@ def _openml_target_to_series(target, target_column: str, n_rows: int) -> pd.Seri
         )
     series.name = str(target_column)
     return series
+
+
+def _frame_from_openml_bunch(bunch, target_column: str) -> pd.DataFrame:
+    frame = getattr(bunch, "frame", None)
+    if isinstance(frame, pd.DataFrame) and frame.shape[0] > 0:
+        normalized = _normalize_openml_columns(frame)
+        resolved_target = _resolve_column_name(normalized.columns, target_column)
+        if resolved_target not in normalized.columns:
+            raise KeyError(f"Resolved target column {resolved_target!r} missing from OpenML frame")
+        return normalized
+
+    features = _openml_features_to_frame(bunch.data, getattr(bunch, "feature_names", None))
+    try:
+        target = _openml_target_to_series(
+            bunch.target,
+            target_column=target_column,
+            n_rows=features.shape[0],
+        )
+        features[str(target_column).strip()] = target
+        return features
+    except ValueError:
+        pass
+
+    resolved_target = _resolve_column_name(features.columns, target_column)
+    if resolved_target not in features.columns:
+        raise ValueError(
+            f"OpenML target for {target_column!r} was neither returned separately nor present in feature columns"
+        )
+    return features
 
 
 def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.DataFrame) -> Path:
@@ -76,13 +146,8 @@ def _save_openml_table(dataset_name: str, output_root: Path) -> Dict[str, object
         raise ImportError("scikit-learn fetch_openml is unavailable in this environment")
 
     spec = get_real_dataset_spec(dataset_name)
-    bunch = fetch_openml(name=spec.openml_name, version=spec.openml_version, as_frame="auto")
-    frame = _openml_features_to_frame(bunch.data, getattr(bunch, "feature_names", None))
-    frame[spec.target_column] = _openml_target_to_series(
-        bunch.target,
-        target_column=spec.target_column,
-        n_rows=frame.shape[0],
-    )
+    bunch = fetch_openml(name=spec.openml_name, version=spec.openml_version, as_frame=True)
+    frame = _frame_from_openml_bunch(bunch, target_column=spec.target_column)
 
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
     ensure_parent_dirs([paths.raw_table_path, paths.metadata_path])

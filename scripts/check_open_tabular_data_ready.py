@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,21 +43,60 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    ensure_open_tabular_data_ready(
-        classification_datasets=args.classification_datasets,
-        regression_datasets=args.regression_datasets,
-        n_repeats=args.n_repeats,
-        train_ratio=args.train_ratio,
-        valid_ratio=args.valid_ratio,
-        test_ratio=args.test_ratio,
-        base_seed=args.base_seed,
-        classification_raw_root=args.classification_raw_root,
-        classification_processed_root=args.classification_processed_root,
-        classification_split_root=args.classification_split_root,
-        regression_raw_root=args.regression_raw_root,
-        regression_processed_root=args.regression_processed_root,
-        regression_split_root=args.regression_split_root,
-    )
+    failures: list[tuple[str, str, str]] = []
+
+    for dataset_name in args.classification_datasets:
+        try:
+            ensure_open_tabular_data_ready(
+                classification_datasets=[dataset_name],
+                regression_datasets=[],
+                n_repeats=args.n_repeats,
+                train_ratio=args.train_ratio,
+                valid_ratio=args.valid_ratio,
+                test_ratio=args.test_ratio,
+                base_seed=args.base_seed,
+                classification_raw_root=args.classification_raw_root,
+                classification_processed_root=args.classification_processed_root,
+                classification_split_root=args.classification_split_root,
+                regression_raw_root=args.regression_raw_root,
+                regression_processed_root=args.regression_processed_root,
+                regression_split_root=args.regression_split_root,
+            )
+            print(f"[ok] classification/{dataset_name}")
+        except Exception as exc:
+            failures.append(("classification", dataset_name, f"{type(exc).__name__}: {exc}"))
+            print(f"[fail] classification/{dataset_name}: {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+
+    for dataset_name in args.regression_datasets:
+        try:
+            ensure_open_tabular_data_ready(
+                classification_datasets=[],
+                regression_datasets=[dataset_name],
+                n_repeats=args.n_repeats,
+                train_ratio=args.train_ratio,
+                valid_ratio=args.valid_ratio,
+                test_ratio=args.test_ratio,
+                base_seed=args.base_seed,
+                classification_raw_root=args.classification_raw_root,
+                classification_processed_root=args.classification_processed_root,
+                classification_split_root=args.classification_split_root,
+                regression_raw_root=args.regression_raw_root,
+                regression_processed_root=args.regression_processed_root,
+                regression_split_root=args.regression_split_root,
+            )
+            print(f"[ok] regression/{dataset_name}")
+        except Exception as exc:
+            failures.append(("regression", dataset_name, f"{type(exc).__name__}: {exc}"))
+            print(f"[fail] regression/{dataset_name}: {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+
+    if failures:
+        print("[summary] some datasets failed validation:")
+        for task_type, dataset_name, error_text in failures:
+            print(f"  - {task_type}/{dataset_name}: {error_text}")
+        raise SystemExit(1)
+
     print('[ok] all requested tabular datasets were downloaded, prepared, split, and reloaded successfully.')
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from io import StringIO
 from concurrent.futures import as_completed
 import json
 from pathlib import Path
@@ -162,6 +163,11 @@ def _preview_frame_equals(*, stored_frame: pd.DataFrame, full_frame: pd.DataFram
             return False
     return True
 
+def _csv_roundtrip_preview_frame(frame: pd.DataFrame, n_rows: int) -> pd.DataFrame:
+    buffer = StringIO()
+    frame.head(int(n_rows)).to_csv(buffer, index=False)
+    buffer.seek(0)
+    return pd.read_csv(buffer, low_memory=False)
 
 def _validate_processed_classification_artifacts(*, dataset_name: str, raw_root: Path, processed_root: Path) -> None:
     processed_paths = classification_dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
@@ -198,7 +204,8 @@ def _validate_processed_classification_artifacts(*, dataset_name: str, raw_root:
     expected_rows = _expected_stored_row_count(manifest=stored_manifest, full_n_rows=int(frame.shape[0]))
     if int(stored_frame.shape[0]) != int(expected_rows):
         raise RuntimeError(f"Stored processed table preview row count is stale for {dataset_name!r}")
-    if not _preview_frame_equals(stored_frame=stored_frame, full_frame=frame, n_rows=expected_rows):
+    expected_preview = _csv_roundtrip_preview_frame(frame=frame, n_rows=expected_rows)
+    if not _preview_frame_equals(stored_frame=stored_frame, full_frame=expected_preview, n_rows=expected_rows):
         raise RuntimeError(f"Stored processed table preview is stale for {dataset_name!r}")
 
 
@@ -237,7 +244,8 @@ def _validate_processed_regression_artifacts(*, dataset_name: str, raw_root: Pat
     expected_rows = _expected_stored_row_count(manifest=stored_manifest, full_n_rows=int(frame.shape[0]))
     if int(stored_frame.shape[0]) != int(expected_rows):
         raise RuntimeError(f"Stored processed table preview row count is stale for {dataset_name!r}")
-    if not _preview_frame_equals(stored_frame=stored_frame, full_frame=frame, n_rows=expected_rows):
+    expected_preview = _csv_roundtrip_preview_frame(frame=frame, n_rows=expected_rows)
+    if not _preview_frame_equals(stored_frame=stored_frame, full_frame=expected_preview, n_rows=expected_rows):
         raise RuntimeError(f"Stored processed table preview is stale for {dataset_name!r}")
 
 

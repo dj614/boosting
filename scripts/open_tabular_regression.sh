@@ -1,3 +1,3 @@
-python scripts/run_open_tabular_benchmark.py   --classification-datasets   --n-jobs 12 --outdir outputs/open_tabular_benchmark_v1_regression
-
+python scripts/run_open_tabular_benchmark.py  --regression-datasets california_housing concrete_compressive_strength superconductivity diamonds --classification-datasets   --n-jobs 12 --outdir outputs/open_tabular_benchmark_v1_regression
+# --use-report-metric-for-selection
 python scripts/analyze_open_tabular_benchmark.py   --input-dir outputs/open_tabular_benchmark_v1_regression   --task-types regression

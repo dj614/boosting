@@ -65,6 +65,15 @@ from .group_risk_ensemble_models import (
     expand_model_grid,
 )
 
+from .tabular_benchmark_models import (
+    BinaryTabularBenchmarkWrapper,
+    RegressionTabularBenchmarkWrapper,
+    TabularBenchmarkModelConfig,
+    TabularBenchmarkWrapper,
+    build_tabular_benchmark_wrapper,
+    expand_tabular_model_grid,
+)
+
 from .sparse_recovery_data import (
     SparseRegressionDataset,
     SparseRegressionSplit,
@@ -122,6 +131,12 @@ __all__ = [
     "BinaryEnsembleWrapper",
     "EnsembleModelConfig",
     "build_binary_ensemble_wrapper",
+    "BinaryTabularBenchmarkWrapper",
+    "RegressionTabularBenchmarkWrapper",
+    "TabularBenchmarkModelConfig",
+    "TabularBenchmarkWrapper",
+    "build_tabular_benchmark_wrapper",
+    "expand_tabular_model_grid",
     "expand_model_grid",
 
     "SparseRegressionDataset",

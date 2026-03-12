@@ -21,6 +21,7 @@ from .schema import (
 _MISSING_TOKENS = {"", "?", "na", "n/a", "none", "null", "nan"}
 
 
+
 def _strip_and_standardize_missing(frame: pd.DataFrame) -> pd.DataFrame:
     clean = frame.copy()
     clean.columns = [str(col).strip() for col in clean.columns]
@@ -33,11 +34,35 @@ def _strip_and_standardize_missing(frame: pd.DataFrame) -> pd.DataFrame:
     return clean
 
 
+
 def _load_raw_frame(dataset_name: str, raw_root: Path) -> pd.DataFrame:
     raw_paths = dataset_raw_paths(dataset_name=dataset_name, root=raw_root)
     if raw_paths.raw_table_path is None or not raw_paths.raw_table_path.exists():
         raise FileNotFoundError(f"Raw table not found for {dataset_name!r}: {raw_paths.raw_table_path}")
     return pd.read_csv(raw_paths.raw_table_path, low_memory=False)
+
+
+
+def _resolve_column_name(frame: pd.DataFrame, requested: str) -> str:
+    requested_stripped = str(requested).strip()
+    if requested_stripped in frame.columns:
+        return requested_stripped
+
+    lowered = {str(col).strip().lower(): str(col) for col in frame.columns}
+    key = requested_stripped.lower()
+    if key in lowered:
+        return lowered[key]
+
+    raise KeyError(
+        f"Column {requested!r} not found after normalization. Available columns: "
+        f"{frame.columns.astype(str).tolist()}"
+    )
+
+
+
+def _resolve_column_names(frame: pd.DataFrame, requested_columns: list[str]) -> list[str]:
+    return [_resolve_column_name(frame, col) for col in requested_columns]
+
 
 
 def _infer_feature_columns(frame: pd.DataFrame, categorical_hint: tuple[str, ...]) -> Dict[str, list[str]]:
@@ -55,28 +80,19 @@ def _infer_feature_columns(frame: pd.DataFrame, categorical_hint: tuple[str, ...
     }
 
 
+
 def _processed_table_from_raw(dataset_name: str, raw_frame: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, object]]:
     spec = get_real_regression_dataset_spec(dataset_name)
     clean = _strip_and_standardize_missing(raw_frame)
 
-    if spec.target_column not in clean.columns:
-        raise KeyError(
-            f"Target column {spec.target_column!r} not found for dataset {dataset_name!r}. "
-            f"Available columns: {clean.columns.astype(str).tolist()}"
-        )
-
-    feature_columns = list(spec.feature_columns) if spec.feature_columns else [
-        str(col) for col in clean.columns if str(col) != spec.target_column
+    resolved_target_column = _resolve_column_name(clean, spec.target_column)
+    requested_feature_columns = list(spec.feature_columns) if spec.feature_columns else [
+        str(col) for col in clean.columns if str(col) != resolved_target_column
     ]
-    missing_features = [col for col in feature_columns if col not in clean.columns]
-    if missing_features:
-        raise KeyError(
-            f"Feature columns missing for dataset {dataset_name!r}: {missing_features}. "
-            f"Available columns: {clean.columns.astype(str).tolist()}"
-        )
+    feature_columns = _resolve_column_names(clean, requested_feature_columns)
 
-    clean = clean.dropna(subset=[spec.target_column]).reset_index(drop=True)
-    target = pd.to_numeric(clean[spec.target_column], errors="coerce")
+    clean = clean.dropna(subset=[resolved_target_column]).reset_index(drop=True)
+    target = pd.to_numeric(clean[resolved_target_column], errors="coerce")
     keep_mask = target.notna().to_numpy()
     clean = clean.loc[keep_mask].reset_index(drop=True)
     target = target.loc[keep_mask].reset_index(drop=True)
@@ -97,6 +113,7 @@ def _processed_table_from_raw(dataset_name: str, raw_frame: pd.DataFrame) -> tup
         "task_type": spec.task_type,
         "source_type": spec.source_type,
         "raw_target_column": spec.target_column,
+        "resolved_raw_target_column": resolved_target_column,
         "processed_target_column": "__target__",
         "sample_id_column": "__sample_id__",
         "default_split_strategy": spec.default_split_strategy,
@@ -104,6 +121,7 @@ def _processed_table_from_raw(dataset_name: str, raw_frame: pd.DataFrame) -> tup
         "n_columns": int(processed.shape[1]),
         "n_feature_columns": int(features.shape[1]),
         "feature_columns": features.columns.astype(str).tolist(),
+        "requested_feature_columns": requested_feature_columns,
         "numeric_columns": feature_info["numeric_columns"],
         "categorical_columns": feature_info["categorical_columns"],
         "missing_per_column": {
@@ -120,6 +138,7 @@ def _processed_table_from_raw(dataset_name: str, raw_frame: pd.DataFrame) -> tup
         "notes": spec.notes,
     }
     return processed, manifest
+
 
 
 def prepare_real_regression_dataset(
@@ -144,9 +163,14 @@ def prepare_real_regression_dataset(
     return processed_paths.dataset_root
 
 
+
 def prepare_real_regression_datasets(
     dataset_names: Optional[list[str]] = None,
     raw_root: Path | str = DEFAULT_REAL_REGRESSION_DATA_ROOT,
     output_root: Path | str = DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
 ) -> Dict[str, Path]:
     names = dataset_names or list_real_regression_dataset_names()
+    return {
+        name: prepare_real_regression_dataset(dataset_name=name, raw_root=raw_root, output_root=output_root)
+        for name in names
+    }

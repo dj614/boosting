@@ -32,6 +32,17 @@ def _slice_metadata(metadata: Mapping[str, Array], index: Array) -> Dict[str, Ar
     return out
 
 
+def _coerce_categorical_columns(frame: pd.DataFrame, categorical_columns) -> pd.DataFrame:
+    categorical_set = {str(col) for col in categorical_columns if str(col) in frame.columns}
+    if not categorical_set:
+        return frame
+    out = frame.copy()
+    for col in out.columns:
+        if str(col) in categorical_set:
+            out[col] = out[col].astype("string")
+    return out
+
+
 def _make_split(
     X: Array,
     y: Array,
@@ -94,6 +105,7 @@ def load_real_regression_dataset(
     sample_id = frame["__sample_id__"].astype(str).to_numpy(dtype=object)
     y = frame["__target__"].to_numpy(dtype=float)
     raw_features = frame.drop(columns=["__sample_id__", "__target__"]).copy()
+    raw_features = _coerce_categorical_columns(raw_features, processed_manifest.get("categorical_columns", []))
 
     preprocessor = _build_preprocessor(raw_features.iloc[train_idx])
     X_train = preprocessor.fit_transform(raw_features.iloc[train_idx])

@@ -1,0 +1,23 @@
+{
+  "dataset_name": "blood",
+  "default_group_rules": [
+    "difficulty_group"
+  ],
+  "n_columns": 5,
+  "n_rows": 748,
+  "notes": "Blood Transfusion Service Center dataset from OpenML.",
+  "openml_name": "blood-transfusion-service-center",
+  "openml_version": 1,
+  "positive_label": "2",
+  "raw_columns": [
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "Class"
+  ],
+  "raw_table_path": "data\\raw\\real\\blood\\raw_table.csv",
+  "source_type": "openml",
+  "target_column": "Class",
+  "task_type": "binary_classification"
+}

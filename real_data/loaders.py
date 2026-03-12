@@ -36,6 +36,17 @@ def _slice_metadata(metadata: Mapping[str, Array], index: Array) -> Dict[str, Ar
     return out
 
 
+def _coerce_categorical_columns(frame: pd.DataFrame, categorical_columns) -> pd.DataFrame:
+    categorical_set = {str(col) for col in categorical_columns if str(col) in frame.columns}
+    if not categorical_set:
+        return frame
+    out = frame.copy()
+    for col in out.columns:
+        if str(col) in categorical_set:
+            out[col] = out[col].astype("string")
+    return out
+
+
 def _load_cleaned_table(dataset_name: str, processed_root: Path) -> tuple[pd.DataFrame, Dict[str, object]]:
     processed_paths = dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
     if not processed_paths.cleaned_table_path.exists():
@@ -189,6 +200,7 @@ def load_real_binary_classification_dataset(
     group = _group_from_rule(frame=frame, dataset_name=dataset_name, group_definition=resolved_group_definition)
 
     raw_features = frame.drop(columns=["__sample_id__", "__target__"]).copy()
+    raw_features = _coerce_categorical_columns(raw_features, processed_manifest.get("categorical_columns", []))
     sample_id = frame["__sample_id__"].astype(str).to_numpy()
     y = frame["__target__"].to_numpy(dtype=int)
     metadata_frame = pd.DataFrame(
@@ -233,3 +245,18 @@ def load_real_binary_classification_dataset(
         difficulty_metadata = dict(difficulty_dataset.metadata)
         difficulty_metadata["real_dataset_name"] = str(dataset_name)
         difficulty_metadata["repeat_id"] = int(repeat_id)
+        difficulty_metadata["group_definition"] = resolved_group_definition
+        difficulty_metadata["requested_group_definition"] = requested_group_definition
+        difficulty_metadata["processed_manifest"] = processed_manifest
+        difficulty_metadata["split_manifest"] = split_manifest
+        return BinaryClassificationDataset(
+            dataset_name=difficulty_dataset.dataset_name,
+            train=difficulty_dataset.train,
+            valid=difficulty_dataset.valid,
+            test=difficulty_dataset.test,
+            feature_names=list(difficulty_dataset.feature_names),
+            group_names=list(difficulty_dataset.group_names),
+            metadata=difficulty_metadata,
+        )
+
+    return dataset

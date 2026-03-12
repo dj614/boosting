@@ -21,10 +21,12 @@ from .schema import (
 _MISSING_TOKENS = {"", "?", "na", "n/a", "none", "null", "nan"}
 
 
+
 def _normalize_label(value: object) -> str:
     if pd.isna(value):
         return ""
     return str(value).strip().lower()
+
 
 
 def _strip_and_standardize_missing(frame: pd.DataFrame) -> pd.DataFrame:
@@ -37,6 +39,7 @@ def _strip_and_standardize_missing(frame: pd.DataFrame) -> pd.DataFrame:
             normalized = normalized.mask(normalized.str.lower().isin(_MISSING_TOKENS), other=pd.NA)
             clean[col] = normalized
     return clean
+
 
 
 def _load_raw_frame(dataset_name: str, raw_root: Path) -> pd.DataFrame:
@@ -62,22 +65,61 @@ def _load_raw_frame(dataset_name: str, raw_root: Path) -> pd.DataFrame:
     raise ValueError(f"Unsupported source_type for {dataset_name!r}: {spec.source_type}")
 
 
-def _binary_target_from_series(series: pd.Series, positive_label: str, positive_aliases: tuple[str, ...]) -> pd.Series:
+
+def _resolve_column_name(frame: pd.DataFrame, requested: str) -> str:
+    requested_stripped = str(requested).strip()
+    if requested_stripped in frame.columns:
+        return requested_stripped
+
+    lowered = {str(col).strip().lower(): str(col) for col in frame.columns}
+    key = requested_stripped.lower()
+    if key in lowered:
+        return lowered[key]
+
+    raise KeyError(
+        f"Column {requested!r} not found after normalization. Available columns: "
+        f"{frame.columns.astype(str).tolist()}"
+    )
+
+
+
+def _binary_target_from_series(
+    series: pd.Series,
+    positive_label: str,
+    positive_aliases: tuple[str, ...],
+) -> tuple[pd.Series, Dict[str, object]]:
     normalized = series.map(_normalize_label)
+    observed = sorted(v for v in pd.unique(normalized) if v != "")
+    if len(observed) != 2:
+        raise ValueError(
+            "Binary classification preprocessing expects exactly two non-missing target labels; "
+            f"observed labels were: {observed}"
+        )
+
     alias_set = {_normalize_label(positive_label), *(_normalize_label(v) for v in positive_aliases)}
     alias_set.discard("")
-    positive_mask = normalized.isin(alias_set)
-    negative_mask = ~positive_mask
+    matched_positive = sorted(label for label in observed if label in alias_set)
 
-    if int(positive_mask.sum()) == 0:
-        observed = sorted(v for v in pd.unique(normalized) if v != "")
+    if len(matched_positive) == 0:
         raise ValueError(
             "Could not map positive label "
             f"{positive_label!r}; observed target labels were: {observed}"
         )
-    if int(negative_mask.sum()) == 0:
-        raise ValueError("Target column appears to contain only positive labels after normalization")
-    return positive_mask.astype(int)
+    if len(matched_positive) > 1:
+        raise ValueError(
+            "Positive-label aliases are ambiguous after normalization; they matched multiple observed "
+            f"target labels {matched_positive}. Check the dataset spec."
+        )
+
+    observed_positive_label = matched_positive[0]
+    observed_negative_label = next(label for label in observed if label != observed_positive_label)
+    target = (normalized == observed_positive_label).astype(int)
+    return target, {
+        "observed_labels": observed,
+        "observed_positive_label": observed_positive_label,
+        "observed_negative_label": observed_negative_label,
+    }
+
 
 
 def _infer_feature_columns(frame: pd.DataFrame) -> Dict[str, list[str]]:
@@ -89,23 +131,19 @@ def _infer_feature_columns(frame: pd.DataFrame) -> Dict[str, list[str]]:
     }
 
 
+
 def _processed_table_from_raw(dataset_name: str, raw_frame: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, object]]:
     spec = get_real_dataset_spec(dataset_name)
     clean = _strip_and_standardize_missing(raw_frame)
 
-    if spec.target_column not in clean.columns:
-        raise KeyError(
-            f"Target column {spec.target_column!r} not found for dataset {dataset_name!r}. "
-            f"Available columns: {clean.columns.astype(str).tolist()}"
-        )
-
-    clean = clean.dropna(subset=[spec.target_column]).reset_index(drop=True)
-    target = _binary_target_from_series(
-        clean[spec.target_column],
+    resolved_target_column = _resolve_column_name(clean, spec.target_column)
+    clean = clean.dropna(subset=[resolved_target_column]).reset_index(drop=True)
+    target, target_mapping = _binary_target_from_series(
+        clean[resolved_target_column],
         positive_label=spec.positive_label,
         positive_aliases=spec.positive_aliases,
     )
-    features = clean.drop(columns=[spec.target_column]).copy()
+    features = clean.drop(columns=[resolved_target_column]).copy()
 
     processed = pd.DataFrame(
         {
@@ -122,10 +160,12 @@ def _processed_table_from_raw(dataset_name: str, raw_frame: pd.DataFrame) -> tup
         "task_type": spec.task_type,
         "source_type": spec.source_type,
         "raw_target_column": spec.target_column,
+        "resolved_raw_target_column": resolved_target_column,
         "processed_target_column": "__target__",
         "sample_id_column": "__sample_id__",
         "positive_label": spec.positive_label,
         "positive_aliases": list(spec.positive_aliases),
+        "target_mapping": target_mapping,
         "default_group_rules": list(spec.default_group_rules),
         "n_rows": int(processed.shape[0]),
         "n_columns": int(processed.shape[1]),
@@ -145,6 +185,7 @@ def _processed_table_from_raw(dataset_name: str, raw_frame: pd.DataFrame) -> tup
         "notes": spec.notes,
     }
     return processed, manifest
+
 
 
 def prepare_real_dataset(
@@ -167,6 +208,7 @@ def prepare_real_dataset(
         encoding="utf-8",
     )
     return processed_paths.dataset_root
+
 
 
 def prepare_real_datasets(

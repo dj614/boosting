@@ -49,7 +49,7 @@ _REAL_DATASET_SPECS: Dict[str, RealDatasetSpec] = {
         openml_name="blood-transfusion-service-center",
         openml_version=1,
         target_column="Class",
-        positive_aliases=("2", "1", "true", "yes", "positive"),
+        positive_aliases=("2",),
         positive_label="2",
         default_group_rules=("difficulty_group",),
         notes="Blood Transfusion Service Center dataset from OpenML.",
@@ -105,13 +105,16 @@ _REAL_DATASET_SPECS: Dict[str, RealDatasetSpec] = {
 }
 
 
+
 def list_real_dataset_names() -> List[str]:
     return sorted(_REAL_DATASET_SPECS.keys())
+
 
 
 def iter_real_dataset_specs() -> Iterable[RealDatasetSpec]:
     for name in list_real_dataset_names():
         yield _REAL_DATASET_SPECS[name]
+
 
 
 def get_real_dataset_spec(name: str) -> RealDatasetSpec:

@@ -9,14 +9,14 @@ _REAL_REGRESSION_DATASET_SPECS: Dict[str, RealRegressionDatasetSpec] = {
         canonical_name="acs_income_2018",
         task_type="regression",
         source_type="folktables",
-        target_column="income",
+        target_column="PINCP",
         folktables_dataset_name="ACSIncome",
         folktables_year=2018,
         feature_columns=("AGEP", "SCHL", "MAR", "RAC1P", "SEX", "WKHP", "COW"),
         categorical_columns=("SCHL", "MAR", "RAC1P", "SEX", "COW"),
         notes=(
             "Fixed ACS/Folktables regression benchmark for 2018 source microdata. "
-            "Target is income; features cover age, education, marital status, race, sex, work hours, and class of worker."
+            "Target is personal income (PINCP); features cover age, education, marital status, race, sex, work hours, and class of worker."
         ),
     ),
     "california_housing": RealRegressionDatasetSpec(
@@ -31,7 +31,7 @@ _REAL_REGRESSION_DATASET_SPECS: Dict[str, RealRegressionDatasetSpec] = {
         canonical_name="concrete_compressive_strength",
         task_type="regression",
         source_type="uci",
-        target_column="Concrete compressive strength(MPa, megapascals) ",
+        target_column="Concrete compressive strength(MPa, megapascals)",
         uci_dataset_id=165,
         notes="Concrete compressive strength dataset from the UCI repository.",
     ),
@@ -52,12 +52,15 @@ _REAL_REGRESSION_DATASET_SPECS: Dict[str, RealRegressionDatasetSpec] = {
     ),
 }
 
+
 def list_real_regression_dataset_names() -> List[str]:
     return sorted(_REAL_REGRESSION_DATASET_SPECS.keys())
+
 
 def iter_real_regression_dataset_specs() -> Iterable[RealRegressionDatasetSpec]:
     for name in list_real_regression_dataset_names():
         yield _REAL_REGRESSION_DATASET_SPECS[name]
+
 
 def get_real_regression_dataset_spec(name: str) -> RealRegressionDatasetSpec:
     key = str(name).strip().lower()

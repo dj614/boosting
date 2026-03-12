@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import as_completed
 import json
 import sys
 from pathlib import Path
@@ -10,10 +11,12 @@ from typing import Dict, Iterable, List, Sequence
 import numpy as np
 import pandas as pd
 
-from progress_utils import progress_bar
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from parallel_utils import make_process_pool, resolve_n_jobs
+from progress_utils import progress_bar
 
 from sim.grouped_classification_data import (  # noqa: E402
     BinaryClassificationDataset,
@@ -36,6 +39,7 @@ from real_data.schema import (  # noqa: E402
     DEFAULT_REAL_SPLIT_ROOT,
 )
 from sim.group_risk_ensemble_models import (  # noqa: E402
+    EnsembleModelConfig,
     build_binary_ensemble_wrapper,
     expand_model_grid,
 )
@@ -100,6 +104,7 @@ def _make_parser() -> argparse.ArgumentParser:
         default=8,
         help="Representative trajectory samples per group and split. Set 0 to skip sample-level trajectory export.",
     )
+    parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment1_step2"))
     return parser
 
@@ -317,6 +322,123 @@ def _write_json(path: Path, payload: Dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2, default=str))
 
 
+def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
+    seed = int(task["seed"])
+    dataset = _load_dataset(argparse.Namespace(**task["dataset_args"]), seed=seed)
+    model_config = EnsembleModelConfig(**task["model_config"])
+    model_dir = Path(task["model_dir"])
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    wrapper = build_binary_ensemble_wrapper(
+        config=model_config,
+        selection_checkpoints=task["selection_checkpoints"],
+        trajectory_checkpoints=task["trajectory_checkpoints"],
+    )
+    wrapper.fit(dataset.train, dataset.valid)
+    _write_json(model_dir / "model_config.json", model_config.to_dict())
+    if wrapper.selection_trace_ is not None:
+        wrapper.selection_trace_.to_csv(model_dir / "selection_trace.csv", index=False)
+
+    summary_rows: List[Dict[str, object]] = []
+    group_summary_rows: List[Dict[str, object]] = []
+    for split_name in task["prediction_splits"]:
+        split = _split_by_name(dataset, split_name)
+        y_prob = wrapper.predict_proba(split.X)
+        evaluation = evaluate_binary_predictions(y_true=split.y, y_prob=y_prob, group=split.group)
+        metrics_row = _flatten_metrics(
+            evaluation,
+            dataset_name=dataset.dataset_name,
+            split=split_name,
+            seed=seed,
+            model_name=model_config.model_name,
+            selected_checkpoint=int(wrapper.selected_checkpoint_),
+        )
+        summary_rows.append(metrics_row)
+
+        group_df = evaluation["group_metrics"].copy()
+        group_df.insert(0, "selected_checkpoint", int(wrapper.selected_checkpoint_))
+        group_df.insert(0, "model_name", model_config.model_name)
+        group_df.insert(0, "seed", int(seed))
+        group_df.insert(0, "split", split_name)
+        group_df.insert(0, "dataset_name", dataset.dataset_name)
+        group_summary_rows.extend(group_df.to_dict("records"))
+
+        _write_json(model_dir / f"metrics_{split_name}.json", {
+            "overall": evaluation["overall"],
+            "core_risk": evaluation["core_risk"],
+            "selected_checkpoint": int(wrapper.selected_checkpoint_),
+        })
+        group_df.to_csv(model_dir / f"group_metrics_{split_name}.csv", index=False)
+
+        prediction_frame = make_binary_prediction_frame(
+            sample_id=split.sample_id,
+            dataset_name=dataset.dataset_name,
+            split=split_name,
+            seed=seed,
+            model_name=model_config.model_name,
+            group=split.group,
+            y_true=split.y,
+            y_prob=y_prob,
+            metadata=split.metadata,
+        )
+        save_prediction_frame(prediction_frame, model_dir / f"predictions_{split_name}.csv")
+
+    core_rows: List[Dict[str, object]] = []
+    group_rows: List[Dict[str, object]] = []
+    sample_frames: List[pd.DataFrame] = []
+    for split_name in task["trajectory_splits"]:
+        split = _split_by_name(dataset, split_name)
+        staged_probs = wrapper.trajectory(split.X)
+        model_name = model_config.model_name
+        core_rows.extend(
+            _trajectory_core_rows(
+                dataset_name=dataset.dataset_name,
+                split_name=split_name,
+                seed=seed,
+                model_name=model_name,
+                selected_checkpoint=int(wrapper.selected_checkpoint_),
+                split=split,
+                staged_probs=staged_probs,
+            )
+        )
+        group_rows.extend(
+            _trajectory_group_rows(
+                dataset_name=dataset.dataset_name,
+                split_name=split_name,
+                seed=seed,
+                model_name=model_name,
+                selected_checkpoint=int(wrapper.selected_checkpoint_),
+                split=split,
+                staged_probs=staged_probs,
+            )
+        )
+        sample_idx = _representative_sample_indices(split, int(task["trajectory_sample_count_per_group"]))
+        sample_frame = _trajectory_sample_rows(
+            dataset_name=dataset.dataset_name,
+            split_name=split_name,
+            seed=seed,
+            model_name=model_name,
+            selected_checkpoint=int(wrapper.selected_checkpoint_),
+            split=split,
+            staged_probs=staged_probs,
+            sample_indices=sample_idx,
+        )
+        if not sample_frame.empty:
+            sample_frames.append(sample_frame)
+
+    if core_rows:
+        pd.DataFrame(core_rows).to_csv(model_dir / "trajectory_core.csv", index=False)
+    if group_rows:
+        pd.DataFrame(group_rows).to_csv(model_dir / "trajectory_groups.csv", index=False)
+    if sample_frames:
+        pd.concat(sample_frames, ignore_index=True).to_csv(model_dir / "trajectory_samples.csv", index=False)
+
+    return {
+        "summary_rows": summary_rows,
+        "group_summary_rows": group_summary_rows,
+    }
+
+
 
 def main() -> None:
     parser = _make_parser()
@@ -358,9 +480,49 @@ def main() -> None:
 
     summary_rows: List[Dict[str, object]] = []
     group_summary_rows: List[Dict[str, object]] = []
+    model_grid_template = expand_model_grid(
+        families=families,
+        max_depths=args.max_depths,
+        n_estimators=max(selection_checkpoints),
+        learning_rate=args.learning_rate,
+        min_samples_leaf=args.min_samples_leaf,
+        subsample=args.subsample,
+        colsample_bytree=args.colsample_bytree,
+        inner_bootstraps=args.ctb_inner_bootstraps,
+        eta=args.ctb_eta,
+        instability_penalty=args.ctb_instability_penalty,
+        weight_power=args.ctb_weight_power,
+        weight_eps=args.ctb_weight_eps,
+        random_state=args.seed_start,
+    )
+    total_models = args.num_seeds * len(model_grid_template)
 
-    total_models = args.num_seeds * len(
-        expand_model_grid(
+    if args.dataset == "real" and args.repeat_id is None:
+        seed_iterable = range(args.seed_start, args.seed_start + args.num_seeds)
+    elif args.dataset == "real":
+        seed_iterable = [int(args.repeat_id)]
+    else:
+        seed_iterable = range(args.seed_start, args.seed_start + args.num_seeds)
+
+    dataset_args = {
+        "dataset": args.dataset,
+        "group_definition": args.group_definition,
+        "n_samples": int(args.n_samples),
+        "n_features": int(args.n_features),
+        "valid_size": float(args.valid_size),
+        "test_size": float(args.test_size),
+        "real_dataset_name": args.real_dataset_name,
+        "repeat_id": args.repeat_id,
+        "processed_root": args.processed_root,
+        "split_root": args.split_root,
+    }
+    tasks: List[Dict[str, object]] = []
+    for seed in seed_iterable:
+        dataset = _load_dataset(args, seed=seed)
+        seed_dir = outdir / dataset.dataset_name / f"seed_{seed:03d}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(seed_dir / "dataset_summary.json", summarize_binary_classification_dataset(dataset))
+        model_grid = expand_model_grid(
             families=families,
             max_depths=args.max_depths,
             n_estimators=max(selection_checkpoints),
@@ -373,145 +535,41 @@ def main() -> None:
             instability_penalty=args.ctb_instability_penalty,
             weight_power=args.ctb_weight_power,
             weight_eps=args.ctb_weight_eps,
-            random_state=args.seed_start,
+            random_state=seed,
         )
-    )
-
-    if args.dataset == "real" and args.repeat_id is None:
-        seed_iterable = range(args.seed_start, args.seed_start + args.num_seeds)
-    elif args.dataset == "real":
-        seed_iterable = [int(args.repeat_id)]
-    else:
-        seed_iterable = range(args.seed_start, args.seed_start + args.num_seeds)
-
-    with progress_bar(total=total_models, desc="Experiment 2 benchmark", unit="model") as pbar:
-        for seed in seed_iterable:
-            dataset = _load_dataset(args, seed=seed)
-            seed_dir = outdir / dataset.dataset_name / f"seed_{seed:03d}"
-            seed_dir.mkdir(parents=True, exist_ok=True)
-            _write_json(seed_dir / "dataset_summary.json", summarize_binary_classification_dataset(dataset))
-
-            model_grid = expand_model_grid(
-                families=families,
-                max_depths=args.max_depths,
-                n_estimators=max(selection_checkpoints),
-                learning_rate=args.learning_rate,
-                min_samples_leaf=args.min_samples_leaf,
-                subsample=args.subsample,
-                colsample_bytree=args.colsample_bytree,
-                inner_bootstraps=args.ctb_inner_bootstraps,
-                eta=args.ctb_eta,
-                instability_penalty=args.ctb_instability_penalty,
-                weight_power=args.ctb_weight_power,
-                weight_eps=args.ctb_weight_eps,
-                random_state=seed,
+        for model_config in model_grid:
+            tasks.append(
+                {
+                    "seed": int(seed),
+                    "dataset_args": dataset_args,
+                    "model_config": model_config.to_dict(),
+                    "selection_checkpoints": selection_checkpoints,
+                    "trajectory_checkpoints": trajectory_checkpoints,
+                    "prediction_splits": list(args.prediction_splits),
+                    "trajectory_splits": list(args.trajectory_splits),
+                    "trajectory_sample_count_per_group": int(args.trajectory_sample_count_per_group),
+                    "model_dir": str(seed_dir / model_config.model_name),
+                }
             )
-            for model_config in model_grid:
-                model_name = model_config.model_name
-                pbar.set_postfix(seed=seed, model=model_name)
-                model_dir = seed_dir / model_name
-                model_dir.mkdir(parents=True, exist_ok=True)
-                wrapper = build_binary_ensemble_wrapper(
-                    config=model_config,
-                    selection_checkpoints=selection_checkpoints,
-                    trajectory_checkpoints=trajectory_checkpoints,
-                )
-                wrapper.fit(dataset.train, dataset.valid)
-                _write_json(model_dir / "model_config.json", model_config.to_dict())
-                if wrapper.selection_trace_ is not None:
-                    wrapper.selection_trace_.to_csv(model_dir / "selection_trace.csv", index=False)
 
-                for split_name in args.prediction_splits:
-                    split = _split_by_name(dataset, split_name)
-                    y_prob = wrapper.predict_proba(split.X)
-                    evaluation = evaluate_binary_predictions(y_true=split.y, y_prob=y_prob, group=split.group)
-                    metrics_row = _flatten_metrics(
-                        evaluation,
-                        dataset_name=dataset.dataset_name,
-                        split=split_name,
-                        seed=seed,
-                        model_name=model_name,
-                        selected_checkpoint=int(wrapper.selected_checkpoint_),
-                    )
-                    summary_rows.append(metrics_row)
-
-                    group_df = evaluation["group_metrics"].copy()
-                    group_df.insert(0, "selected_checkpoint", int(wrapper.selected_checkpoint_))
-                    group_df.insert(0, "model_name", model_name)
-                    group_df.insert(0, "seed", int(seed))
-                    group_df.insert(0, "split", split_name)
-                    group_df.insert(0, "dataset_name", dataset.dataset_name)
-                    group_summary_rows.extend(group_df.to_dict("records"))
-
-                    _write_json(model_dir / f"metrics_{split_name}.json", {
-                        "overall": evaluation["overall"],
-                        "core_risk": evaluation["core_risk"],
-                        "selected_checkpoint": int(wrapper.selected_checkpoint_),
-                    })
-                    group_df.to_csv(model_dir / f"group_metrics_{split_name}.csv", index=False)
-
-                    prediction_frame = make_binary_prediction_frame(
-                        sample_id=split.sample_id,
-                        dataset_name=dataset.dataset_name,
-                        split=split_name,
-                        seed=seed,
-                        model_name=model_name,
-                        group=split.group,
-                        y_true=split.y,
-                        y_prob=y_prob,
-                        metadata=split.metadata,
-                    )
-                    save_prediction_frame(prediction_frame, model_dir / f"predictions_{split_name}.csv")
-
-                core_rows: List[Dict[str, object]] = []
-                group_rows: List[Dict[str, object]] = []
-                sample_frames: List[pd.DataFrame] = []
-                for split_name in args.trajectory_splits:
-                    split = _split_by_name(dataset, split_name)
-                    staged_probs = wrapper.trajectory(split.X)
-                    core_rows.extend(
-                        _trajectory_core_rows(
-                            dataset_name=dataset.dataset_name,
-                           split_name=split_name,
-                            seed=seed,
-                            model_name=model_name,
-                            selected_checkpoint=int(wrapper.selected_checkpoint_),
-                            split=split,
-                            staged_probs=staged_probs,
-                        )
-                    )
-                    group_rows.extend(
-                        _trajectory_group_rows(
-                            dataset_name=dataset.dataset_name,
-                            split_name=split_name,
-                            seed=seed,
-                            model_name=model_name,
-                            selected_checkpoint=int(wrapper.selected_checkpoint_),
-                            split=split,
-                            staged_probs=staged_probs,
-                        )
-                    )
-                    sample_idx = _representative_sample_indices(split, args.trajectory_sample_count_per_group)
-                    sample_frame = _trajectory_sample_rows(
-                        dataset_name=dataset.dataset_name,
-                        split_name=split_name,
-                        seed=seed,
-                        model_name=model_name,
-                        selected_checkpoint=int(wrapper.selected_checkpoint_),
-                        split=split,
-                        staged_probs=staged_probs,
-                        sample_indices=sample_idx,
-                    )
-                    if not sample_frame.empty:
-                        sample_frames.append(sample_frame)
-
-                if core_rows:
-                    pd.DataFrame(core_rows).to_csv(model_dir / "trajectory_core.csv", index=False)
-                if group_rows:
-                    pd.DataFrame(group_rows).to_csv(model_dir / "trajectory_groups.csv", index=False)
-                if sample_frames:
-                    pd.concat(sample_frames, ignore_index=True).to_csv(model_dir / "trajectory_samples.csv", index=False)
+    n_jobs = resolve_n_jobs(args.n_jobs)
+    with progress_bar(total=len(tasks), desc="Experiment 2 benchmark", unit="model") as pbar:
+        if n_jobs <= 1:
+            results = []
+            for task in tasks:
+                results.append(_run_model_task(task))
                 pbar.update(1)
+        else:
+            results = []
+            with make_process_pool(n_jobs) as executor:
+                futures = [executor.submit(_run_model_task, task) for task in tasks]
+                for future in as_completed(futures):
+                    results.append(future.result())
+                    pbar.update(1)
+
+    for result in results:
+        summary_rows.extend(result["summary_rows"])
+        group_summary_rows.extend(result["group_summary_rows"])
 
     if summary_rows:
         summary_df = pd.DataFrame(summary_rows)

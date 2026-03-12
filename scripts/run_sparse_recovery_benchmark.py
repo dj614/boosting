@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import as_completed
 import json
 import sys
 from pathlib import Path
@@ -23,6 +24,7 @@ if alias_src.exists() and "sim.experiment1_step3_analysis" not in sys.modules:
 
 import numpy as np
 import pandas as pd
+from parallel_utils import make_process_pool, resolve_n_jobs
 from progress_utils import progress_bar
 from sim.sparse_recovery_data import generate_sparse_regression_dataset, summarize_sparse_regression_dataset
 from sim.sparse_recovery_eval import make_feature_support_frame, regression_metrics, support_recovery_metrics
@@ -69,6 +71,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-min-consensus-frequency", type=float, default=0.25)
     parser.add_argument("--ctb-min-sign-consistency", type=float, default=0.75)
     parser.add_argument("--ctb-support-frequency-threshold", type=float, default=0.05)
+    parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--save-feature-tables", action="store_true")
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment4_sparse_recovery"))
     return parser
@@ -158,6 +161,78 @@ def _trial_row(*, design: str, rep: int, model_name: str, dataset, model: object
     return row
 
 
+def _run_model_trial(task: Dict[str, object]) -> Dict[str, object]:
+    design = str(task["design"])
+    rep = int(task["rep"])
+    seed = int(task["base_seed"]) + rep
+    model_name = str(task["model_name"])
+    dataset = generate_sparse_regression_dataset(
+        n_train=int(task["n_train"]),
+        n_valid=int(task["n_valid"]),
+        n_test=int(task["n_test"]),
+        p=int(task["p"]),
+        s=int(task["s"]),
+        design=design,
+        rho=float(task["rho"]),
+        block_size=int(task["block_size"]),
+        beta_scale=float(task["beta_scale"]),
+        beta_pattern=str(task["beta_pattern"]),
+        support_strategy=str(task["support_strategy"]),
+        snr=float(task["snr"]),
+        seed=seed,
+    )
+    dataset_summary = summarize_sparse_regression_dataset(dataset)
+    dataset_summary.update({"design": design, "rep": rep, "seed": seed})
+
+    model_kwargs = {"random_state": seed}
+    if model_name == "ctb_sparse":
+        model_kwargs.update(
+            max_steps=int(task["ctb_max_steps"]),
+            n_inner_bootstraps=int(task["ctb_inner_bootstraps"]),
+            eta=float(task["ctb_eta"]),
+            residual_weight_power=float(task["ctb_residual_weight_power"]),
+            residual_weight_eps=float(task["ctb_residual_weight_eps"]),
+            consensus_frequency_power=float(task["ctb_consensus_frequency_power"]),
+            consensus_sign_power=float(task["ctb_consensus_sign_power"]),
+            instability_lambda=float(task["ctb_instability_lambda"]),
+            instability_power=float(task["ctb_instability_power"]),
+            min_consensus_frequency=float(task["ctb_min_consensus_frequency"]),
+            min_sign_consistency=float(task["ctb_min_sign_consistency"]),
+            support_frequency_threshold=float(task["ctb_support_frequency_threshold"]),
+        )
+    model = build_experiment4_model(model_name=model_name, **model_kwargs)
+    model.fit(dataset.train, dataset.valid)
+    support_hat, support_mode = _resolve_support_hat(model_name, model, dataset, task["xgb_support_k"])
+
+    trace = getattr(model, "selection_trace_", None)
+    if trace is not None:
+        trace = trace.copy()
+        trace.insert(0, "model_name", model_name)
+        trace.insert(0, "rep", rep)
+        trace.insert(0, "design", design)
+        _save_table(trace, Path(task["traces_dir"]) / f"{design}__rep{rep:02d}__{model_name}.csv")
+
+    if bool(task["save_feature_tables"]):
+        feature_frame = _feature_frame_for_model(model_name, model, dataset, support_hat, support_mode)
+        feature_frame.insert(0, "model_name", model_name)
+        feature_frame.insert(0, "rep", rep)
+        feature_frame.insert(0, "design", design)
+        _save_table(feature_frame, Path(task["features_dir"]) / f"{design}__rep{rep:02d}__{model_name}.csv")
+
+    return {
+        "trial_row": _trial_row(
+            design=design,
+            rep=rep,
+            model_name=model_name,
+            dataset=dataset,
+            model=model,
+            support_hat=support_hat,
+            support_mode=support_mode,
+        ),
+        "dataset_summary": dataset_summary,
+    }
+
+
 def main() -> None:
     parser = _make_parser()
     args = parser.parse_args()
@@ -196,89 +271,77 @@ def main() -> None:
         "ctb_min_consensus_frequency": args.ctb_min_consensus_frequency,
         "ctb_min_sign_consistency": args.ctb_min_sign_consistency,
         "ctb_support_frequency_threshold": args.ctb_support_frequency_threshold,
+        "n_jobs": args.n_jobs,
         "save_feature_tables": bool(args.save_feature_tables),
     }
     _save_json(config, outdir / "run_config.json")
 
     trial_rows: List[Dict[str, object]] = []
-    dataset_rows: List[Dict[str, object]] = []
+    dataset_row_map: Dict[tuple[str, int], Dict[str, object]] = {}
 
-    total_model_fits = len(args.designs) * args.num_seeds * len(args.models)
-
-    with progress_bar(total=total_model_fits, desc="Experiment 4 benchmark", unit="model") as pbar:
-        for design in args.designs:
-            for rep in range(args.num_seeds):
-                seed = args.base_seed + rep
-                dataset = generate_sparse_regression_dataset(
-                    n_train=args.n_train,
-                    n_valid=args.n_valid,
-                    n_test=args.n_test,
-                    p=args.p,
-                    s=args.s,
-                    design=design,
-                    rho=args.rho,
-                    block_size=args.block_size,
-                    beta_scale=args.beta_scale,
-                    beta_pattern=args.beta_pattern,
-                    support_strategy=args.support_strategy,
-                    snr=args.snr,
-                    seed=seed,
+    tasks: List[Dict[str, object]] = []
+    for design in args.designs:
+        for rep in range(args.num_seeds):
+            for model_name in args.models:
+                tasks.append(
+                    {
+                        "design": design,
+                        "rep": rep,
+                        "model_name": model_name,
+                        "base_seed": int(args.base_seed),
+                        "n_train": int(args.n_train),
+                        "n_valid": int(args.n_valid),
+                        "n_test": int(args.n_test),
+                        "p": int(args.p),
+                        "s": int(args.s),
+                        "rho": float(args.rho),
+                        "block_size": int(args.block_size),
+                        "beta_scale": float(args.beta_scale),
+                        "beta_pattern": args.beta_pattern,
+                        "support_strategy": args.support_strategy,
+                        "snr": float(args.snr),
+                        "xgb_support_k": args.xgb_support_k,
+                        "ctb_max_steps": int(args.ctb_max_steps),
+                        "ctb_inner_bootstraps": int(args.ctb_inner_bootstraps),
+                        "ctb_eta": float(args.ctb_eta),
+                        "ctb_residual_weight_power": float(args.ctb_residual_weight_power),
+                        "ctb_residual_weight_eps": float(args.ctb_residual_weight_eps),
+                        "ctb_consensus_frequency_power": float(args.ctb_consensus_frequency_power),
+                        "ctb_consensus_sign_power": float(args.ctb_consensus_sign_power),
+                        "ctb_instability_lambda": float(args.ctb_instability_lambda),
+                        "ctb_instability_power": float(args.ctb_instability_power),
+                        "ctb_min_consensus_frequency": float(args.ctb_min_consensus_frequency),
+                        "ctb_min_sign_consistency": float(args.ctb_min_sign_consistency),
+                        "ctb_support_frequency_threshold": float(args.ctb_support_frequency_threshold),
+                        "save_feature_tables": bool(args.save_feature_tables),
+                        "traces_dir": str(traces_dir),
+                        "features_dir": str(features_dir),
+                    }
                 )
-                summary = summarize_sparse_regression_dataset(dataset)
-                summary.update({"design": design, "rep": rep, "seed": seed})
-                dataset_rows.append(summary)
 
-                for model_name in args.models:
-                    pbar.set_postfix(design=design, rep=rep, model=model_name)
-                    model_kwargs = {"random_state": seed}
-                    if model_name == "ctb_sparse":
-                        model_kwargs.update(
-                            max_steps=args.ctb_max_steps,
-                            n_inner_bootstraps=args.ctb_inner_bootstraps,
-                            eta=args.ctb_eta,
-                            residual_weight_power=args.ctb_residual_weight_power,
-                            residual_weight_eps=args.ctb_residual_weight_eps,
-                            consensus_frequency_power=args.ctb_consensus_frequency_power,
-                            consensus_sign_power=args.ctb_consensus_sign_power,
-                            instability_lambda=args.ctb_instability_lambda,
-                            instability_power=args.ctb_instability_power,
-                            min_consensus_frequency=args.ctb_min_consensus_frequency,
-                            min_sign_consistency=args.ctb_min_sign_consistency,
-                            support_frequency_threshold=args.ctb_support_frequency_threshold,
-                        )
-                    model = build_experiment4_model(model_name=model_name, **model_kwargs)
-                    model.fit(dataset.train, dataset.valid)
-                    support_hat, support_mode = _resolve_support_hat(model_name, model, dataset, args.xgb_support_k)
-                    trial_rows.append(
-                        _trial_row(
-                            design=design,
-                            rep=rep,
-                            model_name=model_name,
-                            dataset=dataset,
-                            model=model,
-                            support_hat=support_hat,
-                            support_mode=support_mode,
-                        )
-                    )
-
-                    trace = getattr(model, "selection_trace_", None)
-                    if trace is not None:
-                        trace = trace.copy()
-                        trace.insert(0, "model_name", model_name)
-                        trace.insert(0, "rep", rep)
-                        trace.insert(0, "design", design)
-                        _save_table(trace, traces_dir / f"{design}__rep{rep:02d}__{model_name}.csv")
-
-                    if args.save_feature_tables:
-                        feature_frame = _feature_frame_for_model(model_name, model, dataset, support_hat, support_mode)
-                        feature_frame.insert(0, "model_name", model_name)
-                        feature_frame.insert(0, "rep", rep)
-                        feature_frame.insert(0, "design", design)
-                        _save_table(feature_frame, features_dir / f"{design}__rep{rep:02d}__{model_name}.csv")
+    n_jobs = resolve_n_jobs(args.n_jobs)
+    with progress_bar(total=len(tasks), desc="Experiment 4 benchmark", unit="model") as pbar:
+        if n_jobs <= 1:
+            results = []
+            for task in tasks:
+                results.append(_run_model_trial(task))
+                pbar.update(1)
+        else:
+            results = []
+            with make_process_pool(n_jobs) as executor:
+                futures = [executor.submit(_run_model_trial, task) for task in tasks]
+                for future in as_completed(futures):
+                    results.append(future.result())
                     pbar.update(1)
 
+    for result in results:
+        trial_rows.append(result["trial_row"])
+        dataset_summary = result["dataset_summary"]
+        dataset_key = (str(dataset_summary["design"]), int(dataset_summary["rep"]))
+        dataset_row_map.setdefault(dataset_key, dataset_summary)
+
     trial_df = pd.DataFrame(trial_rows)
-    dataset_df = pd.DataFrame(dataset_rows)
+    dataset_df = pd.DataFrame(dataset_row_map.values())
     _save_table(trial_df, outdir / "trial_metrics.csv")
     _save_table(dataset_df, outdir / "dataset_summaries.csv")
 

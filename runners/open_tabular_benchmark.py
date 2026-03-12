@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+from concurrent.futures import as_completed
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -9,6 +11,7 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from progress_utils import progress_bar
+from parallel_utils import make_process_pool, resolve_n_jobs
 from real_data import (
     create_real_data_split_manifests,
     download_real_dataset,
@@ -313,6 +316,7 @@ def run_open_tabular_benchmark(
     regression_processed_root: Path = DEFAULT_REAL_REGRESSION_PROCESSED_ROOT,
     regression_split_root: Path = DEFAULT_REAL_REGRESSION_SPLIT_ROOT,
     output_root: Path = Path("outputs/open_tabular_benchmark"),
+    n_jobs: int = 1,
 ) -> Dict[str, object]:
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -348,86 +352,57 @@ def run_open_tabular_benchmark(
         regression_split_root=Path(regression_split_root),
     )
 
+    run_tasks: List[Dict[str, object]] = [
+        {
+            "task_type": str(task_type),
+            "dataset_name": str(dataset_name),
+            "repeat_id": int(repeat_id),
+            "base_seed": int(base_seed),
+            "families": [str(x) for x in families],
+            "max_rounds": int(max_rounds),
+            "selection_checkpoints": [int(x) for x in selection_checkpoints],
+            "max_depths": [int(x) for x in max_depths],
+            "min_samples_leafs": [int(x) for x in min_samples_leafs],
+            "learning_rates": [float(x) for x in learning_rates],
+            "subsamples": [float(x) for x in subsamples],
+            "colsample_bytree": [float(x) for x in colsample_bytree],
+            "ctb_inner_bootstraps": [int(x) for x in ctb_inner_bootstraps],
+            "ctb_etas": [float(x) for x in ctb_etas],
+            "ctb_instability_penalty": float(ctb_instability_penalty),
+            "ctb_weight_power": float(ctb_weight_power),
+            "ctb_weight_eps": float(ctb_weight_eps),
+            "classification_raw_root": str(classification_raw_root),
+            "classification_processed_root": str(classification_processed_root),
+            "classification_split_root": str(classification_split_root),
+            "regression_raw_root": str(regression_raw_root),
+            "regression_processed_root": str(regression_processed_root),
+            "regression_split_root": str(regression_split_root),
+            "output_root": str(output_root),
+        }
+        for task_type, dataset_name, repeat_id in all_runs
+    ]
+
+    n_jobs = resolve_n_jobs(n_jobs)
+    results: List[Dict[str, object]] = []
+    with progress_bar(total=len(run_tasks), desc="open-tabular benchmark", unit="run") as outer:
+        if n_jobs <= 1:
+            for task in run_tasks:
+                results.append(_run_open_tabular_single_run(task))
+                outer.update(1)
+        else:
+            with make_process_pool(n_jobs) as executor:
+                futures = [executor.submit(_run_open_tabular_single_run, task) for task in run_tasks]
+                for future in as_completed(futures):
+                    results.append(future.result())
+                    outer.update(1)
+
     summary_test_rows: List[Dict[str, object]] = []
     summary_valid_rows: List[Dict[str, object]] = []
     error_rows: List[Dict[str, object]] = []
-
-    with progress_bar(total=len(all_runs), desc="open-tabular benchmark", unit="run") as outer:
-        for task_type, dataset_name, repeat_id in all_runs:
-            run_seed = int(base_seed) + int(repeat_id)
-            try:
-                dataset = _load_task_dataset(
-                    task_type=task_type,
-                    dataset_name=dataset_name,
-                    repeat_id=repeat_id,
-                    run_seed=run_seed,
-                    classification_raw_root=Path(classification_raw_root),
-                    classification_processed_root=Path(classification_processed_root),
-                    classification_split_root=Path(classification_split_root),
-                    regression_raw_root=Path(regression_raw_root),
-                    regression_processed_root=Path(regression_processed_root),
-                    regression_split_root=Path(regression_split_root),
-                )
-            except Exception as exc:
-                error_rows.append(
-                    {
-                        "task_type": task_type,
-                        "dataset_name": dataset_name,
-                        "repeat_id": int(repeat_id),
-                        "family": "__dataset_load__",
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                    }
-                )
-                outer.update(1)
-                continue
-
-            dataset_output_dir = output_root / dataset_name / f"repeat_{int(repeat_id):02d}"
-            dataset_output_dir.mkdir(parents=True, exist_ok=True)
-
-            for family in families:
-                try:
-                    family_configs = expand_tabular_model_grid(
-                        task_type=task_type,
-                        families=[family],
-                        max_depths=max_depths,
-                        n_estimators=int(max_rounds),
-                        min_samples_leafs=min_samples_leafs,
-                        learning_rates=learning_rates,
-                        subsamples=subsamples,
-                        colsample_bytree=colsample_bytree,
-                        inner_bootstraps=ctb_inner_bootstraps,
-                        etas=ctb_etas,
-                        instability_penalty=float(ctb_instability_penalty),
-                        weight_power=float(ctb_weight_power),
-                        weight_eps=float(ctb_weight_eps),
-                        random_state=run_seed,
-                    )
-                    result = _run_family_grid_search(
-                        task_type=task_type,
-                        dataset_name=dataset_name,
-                        repeat_id=repeat_id,
-                        run_seed=run_seed,
-                        dataset=dataset,
-                        family=str(family),
-                        configs=family_configs,
-                        selection_checkpoints=selection_checkpoints,
-                        output_dir=dataset_output_dir / str(family),
-                    )
-                    summary_test_rows.append(result["test_summary_row"])
-                    summary_valid_rows.append(result["valid_summary_row"])
-                except Exception as exc:
-                    error_rows.append(
-                        {
-                            "task_type": task_type,
-                            "dataset_name": dataset_name,
-                            "repeat_id": int(repeat_id),
-                            "family": str(family),
-                            "error_type": type(exc).__name__,
-                            "error_message": str(exc),
-                        }
-                    )
-            outer.update(1)
+    for result in results:
+        summary_test_rows.extend(result["summary_test_rows"])
+        summary_valid_rows.extend(result["summary_valid_rows"])
+        error_rows.extend(result["error_rows"])
 
     pd.DataFrame(summary_test_rows).to_csv(output_root / "summary_test_metrics.csv", index=False)
     pd.DataFrame(summary_valid_rows).to_csv(output_root / "summary_valid_selection.csv", index=False)
@@ -623,6 +598,100 @@ def _load_task_dataset(
     raise ValueError(f"Unsupported task_type={task_type!r}")
 
 
+def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
+    task_type = str(task["task_type"])
+    dataset_name = str(task["dataset_name"])
+    repeat_id = int(task["repeat_id"])
+    run_seed = int(task["base_seed"]) + int(repeat_id)
+
+    summary_test_rows: List[Dict[str, object]] = []
+    summary_valid_rows: List[Dict[str, object]] = []
+    error_rows: List[Dict[str, object]] = []
+
+    try:
+        dataset = _load_task_dataset(
+            task_type=task_type,
+            dataset_name=dataset_name,
+            repeat_id=repeat_id,
+            run_seed=run_seed,
+            classification_raw_root=Path(task["classification_raw_root"]),
+            classification_processed_root=Path(task["classification_processed_root"]),
+            classification_split_root=Path(task["classification_split_root"]),
+            regression_raw_root=Path(task["regression_raw_root"]),
+            regression_processed_root=Path(task["regression_processed_root"]),
+            regression_split_root=Path(task["regression_split_root"]),
+        )
+    except Exception as exc:
+        error_rows.append(
+            {
+                "task_type": task_type,
+                "dataset_name": dataset_name,
+                "repeat_id": int(repeat_id),
+                "family": "__dataset_load__",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            }
+        )
+        return {
+            "summary_test_rows": summary_test_rows,
+            "summary_valid_rows": summary_valid_rows,
+            "error_rows": error_rows,
+        }
+
+    dataset_output_dir = Path(task["output_root"]) / dataset_name / f"repeat_{int(repeat_id):02d}"
+    dataset_output_dir.mkdir(parents=True, exist_ok=True)
+
+    for family in task["families"]:
+        try:
+            family_configs = expand_tabular_model_grid(
+                task_type=task_type,
+                families=[str(family)],
+                max_depths=task["max_depths"],
+                n_estimators=int(task["max_rounds"]),
+                min_samples_leafs=task["min_samples_leafs"],
+                learning_rates=task["learning_rates"],
+                subsamples=task["subsamples"],
+                colsample_bytree=task["colsample_bytree"],
+                inner_bootstraps=task["ctb_inner_bootstraps"],
+                etas=task["ctb_etas"],
+                instability_penalty=float(task["ctb_instability_penalty"]),
+                weight_power=float(task["ctb_weight_power"]),
+                weight_eps=float(task["ctb_weight_eps"]),
+                random_state=run_seed,
+            )
+            result = _run_family_grid_search(
+                task_type=task_type,
+                dataset_name=dataset_name,
+                repeat_id=repeat_id,
+                run_seed=run_seed,
+                dataset=dataset,
+                family=str(family),
+                configs=family_configs,
+                selection_checkpoints=task["selection_checkpoints"],
+                output_dir=dataset_output_dir / str(family),
+                show_progress=False,
+            )
+            summary_test_rows.append(result["test_summary_row"])
+            summary_valid_rows.append(result["valid_summary_row"])
+        except Exception as exc:
+            error_rows.append(
+                {
+                    "task_type": task_type,
+                    "dataset_name": dataset_name,
+                    "repeat_id": int(repeat_id),
+                    "family": str(family),
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                }
+            )
+
+    return {
+        "summary_test_rows": summary_test_rows,
+        "summary_valid_rows": summary_valid_rows,
+        "error_rows": error_rows,
+    }
+
+
 def _run_family_grid_search(
     *,
     task_type: str,
@@ -634,6 +703,7 @@ def _run_family_grid_search(
     configs: Sequence[TabularBenchmarkModelConfig],
     selection_checkpoints: Sequence[int],
     output_dir: Path,
+    show_progress: bool = True,
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: List[Dict[str, object]] = []
@@ -643,7 +713,12 @@ def _run_family_grid_search(
     best_test_pred: Optional[np.ndarray] = None
 
     desc = f"{dataset_name}/r{int(repeat_id):02d}/{family}"
-    with progress_bar(total=len(configs), desc=desc, unit="cfg", leave=False) as bar:
+    if show_progress:
+        bar_context = progress_bar(total=len(configs), desc=desc, unit="cfg", leave=False)
+    else:
+        bar_context = None
+
+    with bar_context if bar_context is not None else nullcontext() as bar:
         for config in configs:
             wrapper = build_tabular_benchmark_wrapper(config=config, selection_checkpoints=selection_checkpoints)
             wrapper.fit(dataset.train, dataset.valid)
@@ -669,7 +744,8 @@ def _run_family_grid_search(
                 best_config = config
                 best_wrapper = wrapper
                 best_test_pred = np.asarray(test_pred)
-            bar.update(1)
+            if bar is not None:
+                bar.update(1)
 
     if best_row is None or best_config is None or best_wrapper is None or best_test_pred is None:
         raise RuntimeError(f"No successful model fits for dataset={dataset_name!r}, repeat_id={repeat_id}, family={family!r}")

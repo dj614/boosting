@@ -11,3 +11,4 @@ wandb
 seaborn
 folktables
 openpyxl
+xlrd

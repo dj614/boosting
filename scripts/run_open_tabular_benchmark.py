@@ -41,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
     parser.add_argument("--ctb-weight-power", type=float, default=1.0)
     parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
+    parser.add_argument("--ctb-target-modes", nargs="*", default=["legacy"])
+    parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
     parser.add_argument("--n-repeats", type=int, default=5)
     parser.add_argument("--base-seed", type=int, default=0)
     parser.add_argument("--train-ratio", type=float, default=0.8)
@@ -86,6 +88,8 @@ def main() -> None:
         ctb_instability_penalty=args.ctb_instability_penalty,
         ctb_weight_power=args.ctb_weight_power,
         ctb_weight_eps=args.ctb_weight_eps,
+        ctb_target_modes=args.ctb_target_modes,
+        ctb_curvature_eps=args.ctb_curvature_eps,
         n_repeats=args.n_repeats,
         base_seed=args.base_seed,
         train_ratio=args.train_ratio,

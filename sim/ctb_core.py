@@ -8,6 +8,7 @@ from sklearn.tree import DecisionTreeRegressor
 
 
 TaskType = Literal["regression", "classification"]
+UpdateTargetMode = Literal["legacy", "loss_aware"]
 
 
 class ConsensusTransportBoosting(BaseEstimator):
@@ -28,6 +29,8 @@ class ConsensusTransportBoosting(BaseEstimator):
         instability_penalty: float = 0.0,
         weight_power: float = 1.0,
         weight_eps: float = 1e-8,
+        update_target_mode: UpdateTargetMode = "legacy",
+        transport_curvature_eps: float = 1e-6,
         denom_eps: float = 1e-12,
         max_depth: int | None = 1,
         min_samples_leaf: int = 5,
@@ -40,6 +43,8 @@ class ConsensusTransportBoosting(BaseEstimator):
         self.instability_penalty = float(instability_penalty)
         self.weight_power = float(weight_power)
         self.weight_eps = float(weight_eps)
+        self.update_target_mode = str(update_target_mode)
+        self.transport_curvature_eps = float(transport_curvature_eps)
         self.denom_eps = float(denom_eps)
         self.max_depth = max_depth
         self.min_samples_leaf = int(min_samples_leaf)
@@ -50,11 +55,28 @@ class ConsensusTransportBoosting(BaseEstimator):
         clipped = np.clip(np.asarray(score, dtype=float), -30.0, 30.0)
         return 1.0 / (1.0 + np.exp(-clipped))
 
-    def _pseudo_response(self, y: np.ndarray, score: np.ndarray) -> np.ndarray:
+    def _loss_geometry(self, y: np.ndarray, score: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         if self.task_type == "regression":
-            return np.asarray(y, dtype=float) - np.asarray(score, dtype=float)
+            first_order = np.asarray(y, dtype=float) - np.asarray(score, dtype=float)
+            curvature = np.ones_like(first_order, dtype=float)
+            return first_order, curvature
         proba = self._sigmoid(score)
-        return np.asarray(y, dtype=float) - proba
+        first_order = np.asarray(y, dtype=float) - proba
+        curvature = proba * (1.0 - proba)
+        return first_order, curvature
+
+    def _fit_target_and_weight(
+        self,
+        first_order: np.ndarray,
+        curvature: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        if self.update_target_mode == "legacy":
+            return np.asarray(first_order, dtype=float), None
+        if self.update_target_mode == "loss_aware":
+            adjusted_curvature = np.asarray(curvature, dtype=float) + self.transport_curvature_eps
+            target = np.asarray(first_order, dtype=float) / adjusted_curvature
+            return target, adjusted_curvature
+        raise ValueError(f"Unsupported update_target_mode={self.update_target_mode!r}")
 
     def _sampling_weights(self, pseudo_response: np.ndarray) -> np.ndarray:
         weights = np.power(np.abs(np.asarray(pseudo_response, dtype=float)) + self.weight_eps, self.weight_power)
@@ -79,12 +101,16 @@ class ConsensusTransportBoosting(BaseEstimator):
             raise ValueError(f"Mismatched X/y with shapes {X.shape} and {y.shape}")
         if self.task_type not in {"regression", "classification"}:
             raise ValueError(f"Unsupported task_type={self.task_type!r}")
+        if self.update_target_mode not in {"legacy", "loss_aware"}:
+            raise ValueError(f"Unsupported update_target_mode={self.update_target_mode!r}")
         if self.n_estimators <= 0:
             raise ValueError("n_estimators must be positive")
         if self.n_inner_bootstraps <= 0:
             raise ValueError("n_inner_bootstraps must be positive")
         if self.eta <= 0.0:
             raise ValueError("eta must be positive")
+        if self.transport_curvature_eps < 0.0:
+            raise ValueError("transport_curvature_eps must be non-negative")
 
         rng = np.random.default_rng(self.random_state)
         n_samples = X.shape[0]
@@ -96,22 +122,27 @@ class ConsensusTransportBoosting(BaseEstimator):
         self.n_features_in_ = X.shape[1]
 
         for _ in range(self.n_estimators):
-            pseudo_response = self._pseudo_response(y, train_score)
-            sampling_weights = self._sampling_weights(pseudo_response)
+            first_order, curvature = self._loss_geometry(y, train_score)
+            fit_target, fit_sample_weight = self._fit_target_and_weight(first_order, curvature)
+            sampling_weights = self._sampling_weights(first_order)
 
             round_learners = []
             round_predictions = np.empty((self.n_inner_bootstraps, n_samples), dtype=float)
             for bootstrap_idx in range(self.n_inner_bootstraps):
                 sample_idx = rng.choice(n_samples, size=n_samples, replace=True, p=sampling_weights)
                 learner = self._make_weak_learner(random_state=int(rng.integers(0, 2**31 - 1)))
-                learner.fit(X[sample_idx], pseudo_response[sample_idx])
+                learner.fit(
+                    X[sample_idx],
+                    fit_target[sample_idx],
+                    sample_weight=None if fit_sample_weight is None else fit_sample_weight[sample_idx],
+                )
                 round_learners.append(learner)
                 round_predictions[bootstrap_idx] = np.asarray(learner.predict(X), dtype=float).reshape(-1)
 
             consensus = round_predictions.mean(axis=0)
             instability = np.mean((round_predictions - consensus[None, :]) ** 2, axis=0)
 
-            numerator = float(np.dot(pseudo_response, consensus))
+            numerator = float(np.dot(first_order, consensus))
             denom_main = (1.0 / self.eta) * float(np.dot(consensus, consensus))
             denom_penalty = 2.0 * self.instability_penalty * float(np.dot(instability, consensus**2))
             denominator = max(denom_main + denom_penalty, self.denom_eps)

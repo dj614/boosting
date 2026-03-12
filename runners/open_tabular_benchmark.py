@@ -320,6 +320,8 @@ def run_open_tabular_benchmark(
     ctb_instability_penalty: float = 0.0,
     ctb_weight_power: float = 1.0,
     ctb_weight_eps: float = 1e-8,
+    ctb_target_modes: Sequence[str] = ("legacy",),
+    ctb_curvature_eps: Sequence[float] = (1e-6,),
     n_repeats: int = 5,
     base_seed: int = 0,
     train_ratio: float = 0.8,
@@ -389,6 +391,8 @@ def run_open_tabular_benchmark(
             "ctb_instability_penalty": float(ctb_instability_penalty),
             "ctb_weight_power": float(ctb_weight_power),
             "ctb_weight_eps": float(ctb_weight_eps),
+            "ctb_target_modes": [str(x) for x in ctb_target_modes],
+            "ctb_curvature_eps": [float(x) for x in ctb_curvature_eps],
             "classification_raw_root": str(classification_raw_root),
             "classification_processed_root": str(classification_processed_root),
             "classification_split_root": str(classification_split_root),
@@ -710,6 +714,8 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
                 instability_penalty=float(task["ctb_instability_penalty"]),
                 weight_power=float(task["ctb_weight_power"]),
                 weight_eps=float(task["ctb_weight_eps"]),
+                ctb_target_modes=task["ctb_target_modes"],
+                ctb_curvature_eps=task["ctb_curvature_eps"],
                 random_state=run_seed,
             )
             result = _run_family_grid_search(

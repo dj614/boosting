@@ -43,6 +43,8 @@ class TabularBenchmarkModelConfig:
     instability_penalty: float = 0.0
     weight_power: float = 1.0
     weight_eps: float = 1e-8
+    ctb_target_mode: str = "legacy"
+    ctb_curvature_eps: float = 1e-6
     random_state: int = 0
 
     @property
@@ -285,6 +287,8 @@ class CTBBinaryTabularWrapper(BinaryTabularBenchmarkWrapper):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
+            update_target_mode=self.config.ctb_target_mode,
+            transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
             random_state=self.config.random_state,
@@ -396,6 +400,8 @@ class CTBRegressionTabularWrapper(RegressionTabularBenchmarkWrapper):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
+            update_target_mode=self.config.ctb_target_mode,
+            transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
             random_state=self.config.random_state,
@@ -488,6 +494,8 @@ def expand_tabular_model_grid(
     instability_penalty: float = 0.0,
     weight_power: float = 1.0,
     weight_eps: float = 1e-8,
+    ctb_target_modes: Sequence[str] = ("legacy",),
+    ctb_curvature_eps: Sequence[float] = (1e-6,),
     random_state: int = 0,
 ) -> List[TabularBenchmarkModelConfig]:
     grid: List[TabularBenchmarkModelConfig] = []
@@ -505,6 +513,11 @@ def expand_tabular_model_grid(
         family_colsample = tuple(default_overrides.get("colsample_bytree", colsample_bytree))
         family_inner_bootstraps = tuple(default_overrides.get("inner_bootstraps", inner_bootstraps))
         family_etas = tuple(default_overrides.get("eta", etas))
+        family_ctb_target_modes = tuple(default_overrides.get("ctb_target_mode", ctb_target_modes))
+        family_ctb_curvature_eps = tuple(default_overrides.get("ctb_curvature_eps", ctb_curvature_eps))
+        if task_type != "classification" or family != "ctb":
+            family_ctb_target_modes = (str(family_ctb_target_modes[0]),)
+            family_ctb_curvature_eps = (float(family_ctb_curvature_eps[0]),)
 
         if family in {"bagging", "rf"}:
             for depth in max_depths:
@@ -524,6 +537,8 @@ def expand_tabular_model_grid(
                             instability_penalty=float(instability_penalty),
                             weight_power=float(weight_power),
                             weight_eps=float(weight_eps),
+                            ctb_target_mode=str(family_ctb_target_modes[0]),
+                            ctb_curvature_eps=float(family_ctb_curvature_eps[0]),
                             random_state=int(random_state),
                         )
                     )
@@ -558,24 +573,28 @@ def expand_tabular_model_grid(
                 for leaf in min_samples_leafs:
                     for inner_bootstrap in family_inner_bootstraps:
                         for eta in family_etas:
-                            grid.append(
-                                TabularBenchmarkModelConfig(
-                                    task_type=task_type,
-                                    family=family,
-                                    max_depth=int(depth),
-                                    n_estimators=int(n_estimators),
-                                    min_samples_leaf=int(leaf),
-                                    learning_rate=float(family_learning_rates[0]),
-                                    subsample=float(family_subsamples[0]),
-                                    colsample_bytree=float(family_colsample[0]),
-                                    inner_bootstraps=int(inner_bootstrap),
-                                    eta=float(eta),
-                                    instability_penalty=float(instability_penalty),
-                                    weight_power=float(weight_power),
-                                    weight_eps=float(weight_eps),
-                                    random_state=int(random_state),
-                                )
-                            )
+                            for target_mode in family_ctb_target_modes:
+                                for curvature_eps in family_ctb_curvature_eps:
+                                    grid.append(
+                                        TabularBenchmarkModelConfig(
+                                            task_type=task_type,
+                                            family=family,
+                                            max_depth=int(depth),
+                                            n_estimators=int(n_estimators),
+                                            min_samples_leaf=int(leaf),
+                                            learning_rate=float(family_learning_rates[0]),
+                                            subsample=float(family_subsamples[0]),
+                                            colsample_bytree=float(family_colsample[0]),
+                                            inner_bootstraps=int(inner_bootstrap),
+                                            eta=float(eta),
+                                            instability_penalty=float(instability_penalty),
+                                            weight_power=float(weight_power),
+                                            weight_eps=float(weight_eps),
+                                            ctb_target_mode=str(target_mode),
+                                            ctb_curvature_eps=float(curvature_eps),
+                                            random_state=int(random_state),
+                                        )
+                                    )
             continue
 
     return grid

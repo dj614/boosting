@@ -14,6 +14,7 @@ class RealDatasetSpec:
     positive_label: str
     positive_aliases: Tuple[str, ...] = field(default_factory=tuple)
     openml_name: Optional[str] = None
+    openml_data_id: Optional[int] = None
     openml_version: Optional[int] = None
     uci_download_url: Optional[str] = None
     archive_member: Optional[str] = None

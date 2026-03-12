@@ -136,11 +136,14 @@ def _frame_from_openml_bunch(bunch, target_column: str) -> pd.DataFrame:
     return features
 
 
-def _fetch_openml_bunch(*, name: str, version: int | None):
+def _fetch_openml_bunch(*, name: str | None, version: int | None, data_id: int | None = None):
     if fetch_openml is None:  # pragma: no cover
         raise ImportError("scikit-learn fetch_openml is unavailable in this environment")
 
-    kwargs = {"name": name, "version": version}
+    if data_id is not None:
+        kwargs = {"data_id": data_id}
+    else:
+        kwargs = {"name": name, "version": version}
     signature = inspect.signature(fetch_openml)
     supports_parser = "parser" in signature.parameters
 
@@ -175,7 +178,11 @@ def _write_raw_table_sample(dataset_name: str, output_root: Path, frame: pd.Data
 
 def _save_openml_table(dataset_name: str, output_root: Path) -> Dict[str, object]:
     spec = get_real_dataset_spec(dataset_name)
-    bunch = _fetch_openml_bunch(name=spec.openml_name, version=spec.openml_version)
+    bunch = _fetch_openml_bunch(
+        name=spec.openml_name,
+        version=spec.openml_version,
+        data_id=spec.openml_data_id,
+    )
     frame = _frame_from_openml_bunch(bunch, target_column=spec.target_column)
 
     paths = dataset_raw_paths(dataset_name=dataset_name, root=output_root)
@@ -189,6 +196,7 @@ def _save_openml_table(dataset_name: str, output_root: Path) -> Dict[str, object
         "target_column": spec.target_column,
         "positive_label": spec.positive_label,
         "openml_name": spec.openml_name,
+        "openml_data_id": spec.openml_data_id,
         "openml_version": spec.openml_version,
         "raw_table_path": str(sample_path),
         "raw_table_is_sample": True,

@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--regression-processed-root", type=Path, default=DEFAULT_REAL_REGRESSION_PROCESSED_ROOT)
     parser.add_argument("--regression-split-root", type=Path, default=DEFAULT_REAL_REGRESSION_SPLIT_ROOT)
     parser.add_argument("--outdir", type=Path, default=Path("outputs/open_tabular_benchmark"))
-    parser.add_argument("--n-jobs", type=int, default=4)
+    parser.add_argument("--n-jobs", type=int, default=24)
     return parser.parse_args()
 
 

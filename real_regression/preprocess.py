@@ -27,6 +27,13 @@ _PROCESSED_FRAME_CACHE: Dict[tuple[str, str, str], tuple[pd.DataFrame, Dict[str,
 def _processed_cache_key(dataset_name: str, raw_root: Path, output_root: Path) -> tuple[str, str, str]:
     return str(dataset_name), str(Path(raw_root).resolve()), str(Path(output_root).resolve())
 
+def _read_json_if_exists(path: Path) -> Dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 def _strip_and_standardize_missing(frame: pd.DataFrame) -> pd.DataFrame:
     clean = frame.copy()
@@ -45,12 +52,34 @@ def _load_raw_frame(dataset_name: str, raw_root: Path) -> pd.DataFrame:
     cached = get_cached_raw_frame(dataset_name=dataset_name, output_root=raw_root)
     if cached is not None:
         return cached
+    spec = get_real_regression_dataset_spec(dataset_name)
     raw_paths = dataset_raw_paths(dataset_name=dataset_name, root=raw_root)
-    if raw_paths.raw_table_path is None or not raw_paths.raw_table_path.exists():
+    metadata = _read_json_if_exists(raw_paths.metadata_path)
+    raw_table_is_sample = bool(metadata.get("raw_table_is_sample", False))
+    if raw_table_is_sample or raw_paths.raw_table_path is None or not raw_paths.raw_table_path.exists():
         download_real_regression_dataset(dataset_name=dataset_name, output_root=raw_root, overwrite=False)
         cached = get_cached_raw_frame(dataset_name=dataset_name, output_root=raw_root)
         if cached is not None:
             return cached
+        metadata = _read_json_if_exists(raw_paths.metadata_path)
+        raw_table_is_sample = bool(metadata.get("raw_table_is_sample", False))
+
+    if str(spec.source_type).strip().lower() == "uci":
+        archive_member = str(metadata.get("archive_member", "")).strip()
+        if archive_member:
+            member_path = raw_paths.extracted_dir / archive_member
+            if member_path.exists():
+                if member_path.suffix.lower() in {".xlsx", ".xls"}:
+                    return pd.read_excel(member_path)
+                if member_path.suffix.lower() == ".csv":
+                    return pd.read_csv(member_path, low_memory=False)
+
+    if raw_paths.raw_table_path is None or not raw_paths.raw_table_path.exists():
+        raise FileNotFoundError(f"Raw table not found for {dataset_name!r}: {raw_paths.raw_table_path}")
+    if raw_table_is_sample:
+        raise RuntimeError(
+            f"Raw table for {dataset_name!r} is stored only as a sample preview; full raw data was not materialized."
+        )
     return pd.read_csv(raw_paths.raw_table_path, low_memory=False)
 
 

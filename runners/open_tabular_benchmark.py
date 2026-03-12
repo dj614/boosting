@@ -24,6 +24,7 @@ from real_data.schema import (
     dataset_raw_paths as classification_dataset_raw_paths,
     dataset_split_paths as classification_dataset_split_paths,
 )
+from real_data.preprocess import materialize_real_dataset
 from real_regression import (
     create_real_regression_split_manifests,
     download_real_regression_dataset,
@@ -39,6 +40,7 @@ from real_regression.schema import (
     dataset_raw_paths as regression_dataset_raw_paths,
     dataset_split_paths as regression_dataset_split_paths,
 )
+from real_regression.preprocess import materialize_real_regression_dataset
 from sim.grouped_classification_eval import compute_binary_classification_metrics
 from sim.tabular_benchmark_models import (
     TabularBenchmarkModelConfig,
@@ -97,14 +99,35 @@ def _read_json(path: Path) -> Dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _expected_stored_row_count(*, manifest: Dict[str, object], full_n_rows: int) -> int:
+    if bool(manifest.get("cleaned_table_is_sample", False)):
+        stored = manifest.get("stored_cleaned_sample_rows")
+        if stored is None:
+            stored = min(5, int(full_n_rows))
+        return int(stored)
+    return int(full_n_rows)
 
-def _validate_processed_classification_artifacts(*, dataset_name: str, processed_root: Path) -> None:
+
+def _preview_frame_equals(*, stored_frame: pd.DataFrame, full_frame: pd.DataFrame, n_rows: int) -> bool:
+    lhs = stored_frame.head(int(n_rows)).reset_index(drop=True).copy()
+    rhs = full_frame.head(int(n_rows)).reset_index(drop=True).copy()
+    if lhs.columns.astype(str).tolist() != rhs.columns.astype(str).tolist():
+        return False
+    lhs = lhs.where(pd.notna(lhs), other="__NA__").astype(str)
+    rhs = rhs.where(pd.notna(rhs), other="__NA__").astype(str)
+    return lhs.equals(rhs)
+
+
+def _validate_processed_classification_artifacts(*, dataset_name: str, raw_root: Path, processed_root: Path) -> None:
     processed_paths = classification_dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
     if not processed_paths.cleaned_table_path.exists() or not processed_paths.manifest_path.exists():
         raise FileNotFoundError(f"Missing processed classification artifacts for {dataset_name!r}")
 
-    frame = pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
-    manifest = _read_json(processed_paths.manifest_path)
+    stored_frame = pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
+    stored_manifest = _read_json(processed_paths.manifest_path)
+    frame, fresh_manifest = materialize_real_dataset(
+        dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root
+    )
     if "__sample_id__" not in frame.columns or "__target__" not in frame.columns:
         raise RuntimeError(f"Processed classification table for {dataset_name!r} is missing required columns")
     if frame.empty:
@@ -117,21 +140,34 @@ def _validate_processed_classification_artifacts(*, dataset_name: str, processed
     if labels != [0, 1]:
         raise RuntimeError(f"Processed classification target for {dataset_name!r} must be binary 0/1; got {labels}")
 
-    feature_columns = [str(col) for col in frame.columns if str(col) not in {"__sample_id__", "__target__"}]
-    if int(manifest.get("n_rows", -1)) != int(frame.shape[0]):
+    if int(stored_manifest.get("n_rows", -1)) != int(fresh_manifest.get("n_rows", -1)):
         raise RuntimeError(f"Processed manifest row count is stale for {dataset_name!r}")
-    if feature_columns != list(manifest.get("feature_columns", [])):
+    feature_columns = [str(col) for col in frame.columns if str(col) not in {"__sample_id__", "__target__"}]
+    if feature_columns != list(stored_manifest.get("feature_columns", [])):
         raise RuntimeError(f"Processed manifest feature columns are stale for {dataset_name!r}")
+    if list(stored_manifest.get("numeric_columns", [])) != list(fresh_manifest.get("numeric_columns", [])):
+        raise RuntimeError(f"Processed manifest numeric columns are stale for {dataset_name!r}")
+    if list(stored_manifest.get("categorical_columns", [])) != list(fresh_manifest.get("categorical_columns", [])):
+        raise RuntimeError(f"Processed manifest categorical columns are stale for {dataset_name!r}")
+
+    expected_rows = _expected_stored_row_count(manifest=stored_manifest, full_n_rows=int(frame.shape[0]))
+    if int(stored_frame.shape[0]) != int(expected_rows):
+        raise RuntimeError(f"Stored processed table preview row count is stale for {dataset_name!r}")
+    if not _preview_frame_equals(stored_frame=stored_frame, full_frame=frame, n_rows=expected_rows):
+        raise RuntimeError(f"Stored processed table preview is stale for {dataset_name!r}")
 
 
 
-def _validate_processed_regression_artifacts(*, dataset_name: str, processed_root: Path) -> None:
+def _validate_processed_regression_artifacts(*, dataset_name: str, raw_root: Path, processed_root: Path) -> None:
     processed_paths = regression_dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
     if not processed_paths.cleaned_table_path.exists() or not processed_paths.manifest_path.exists():
         raise FileNotFoundError(f"Missing processed regression artifacts for {dataset_name!r}")
 
-    frame = pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
-    manifest = _read_json(processed_paths.manifest_path)
+    stored_frame = pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
+    stored_manifest = _read_json(processed_paths.manifest_path)
+    frame, fresh_manifest = materialize_real_regression_dataset(
+        dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root
+    )
     if "__sample_id__" not in frame.columns or "__target__" not in frame.columns:
         raise RuntimeError(f"Processed regression table for {dataset_name!r} is missing required columns")
     if frame.empty:
@@ -143,11 +179,21 @@ def _validate_processed_regression_artifacts(*, dataset_name: str, processed_roo
     if not np.all(np.isfinite(y)):
         raise RuntimeError(f"Processed regression target for {dataset_name!r} contains non-finite values")
 
-    feature_columns = [str(col) for col in frame.columns if str(col) not in {"__sample_id__", "__target__"}]
-    if int(manifest.get("n_rows", -1)) != int(frame.shape[0]):
+    if int(stored_manifest.get("n_rows", -1)) != int(fresh_manifest.get("n_rows", -1)):
         raise RuntimeError(f"Processed manifest row count is stale for {dataset_name!r}")
-    if feature_columns != list(manifest.get("feature_columns", [])):
+    feature_columns = [str(col) for col in frame.columns if str(col) not in {"__sample_id__", "__target__"}]
+    if feature_columns != list(stored_manifest.get("feature_columns", [])):
         raise RuntimeError(f"Processed manifest feature columns are stale for {dataset_name!r}")
+    if list(stored_manifest.get("numeric_columns", [])) != list(fresh_manifest.get("numeric_columns", [])):
+        raise RuntimeError(f"Processed manifest numeric columns are stale for {dataset_name!r}")
+    if list(stored_manifest.get("categorical_columns", [])) != list(fresh_manifest.get("categorical_columns", [])):
+        raise RuntimeError(f"Processed manifest categorical columns are stale for {dataset_name!r}")
+
+    expected_rows = _expected_stored_row_count(manifest=stored_manifest, full_n_rows=int(frame.shape[0]))
+    if int(stored_frame.shape[0]) != int(expected_rows):
+        raise RuntimeError(f"Stored processed table preview row count is stale for {dataset_name!r}")
+    if not _preview_frame_equals(stored_frame=stored_frame, full_frame=frame, n_rows=expected_rows):
+        raise RuntimeError(f"Stored processed table preview is stale for {dataset_name!r}")
 
 
 
@@ -156,8 +202,6 @@ def _validate_split_partition(*, dataset_name: str, manifest_path: Path, n_rows:
     train_idx = np.asarray(manifest["train_idx"], dtype=int)
     valid_idx = np.asarray(manifest["valid_idx"], dtype=int)
     test_idx = np.asarray(manifest["test_idx"], dtype=int)
-    if min(train_idx.size, valid_idx.size, test_idx.size) <= 0:
-        raise RuntimeError(f"Split manifest {manifest_path} for {dataset_name!r} contains an empty split")
 
     all_idx = np.sort(np.concatenate([train_idx, valid_idx, test_idx]))
     if all_idx.shape[0] != int(n_rows) or not np.array_equal(all_idx, np.arange(int(n_rows), dtype=int)):
@@ -169,12 +213,12 @@ def _validate_split_partition(*, dataset_name: str, manifest_path: Path, n_rows:
                 raise RuntimeError(
                     f"Split manifest {manifest_path} for {dataset_name!r} yields a single-class {split_name} split"
                 )
+    if min(train_idx.size, valid_idx.size, test_idx.size) <= 0:
+        raise RuntimeError(f"Split manifest {manifest_path} for {dataset_name!r} contains an empty split")
 
 
-
-def _validate_classification_dataset_ready(*, dataset_name: str, n_repeats: int, processed_root: Path, split_root: Path) -> None:
-    processed_paths = classification_dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
-    frame = pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
+def _validate_classification_dataset_ready(*, dataset_name: str, n_repeats: int, raw_root: Path, processed_root: Path, split_root: Path) -> None:
+    frame, _ = materialize_real_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
     y = frame["__target__"].to_numpy(dtype=int)
     split_paths = classification_dataset_split_paths(dataset_name=dataset_name, root=split_root)
     for repeat_id in range(int(n_repeats)):
@@ -184,6 +228,7 @@ def _validate_classification_dataset_ready(*, dataset_name: str, n_repeats: int,
             dataset_name=dataset_name,
             repeat_id=int(repeat_id),
             group_definition="auto",
+            raw_root=raw_root,
             processed_root=processed_root,
             split_root=split_root,
             random_state=int(repeat_id),
@@ -193,9 +238,8 @@ def _validate_classification_dataset_ready(*, dataset_name: str, n_repeats: int,
 
 
 
-def _validate_regression_dataset_ready(*, dataset_name: str, n_repeats: int, processed_root: Path, split_root: Path) -> None:
-    processed_paths = regression_dataset_processed_paths(dataset_name=dataset_name, root=processed_root)
-    frame = pd.read_csv(processed_paths.cleaned_table_path, low_memory=False)
+def _validate_regression_dataset_ready(*, dataset_name: str, n_repeats: int, raw_root: Path, processed_root: Path, split_root: Path) -> None:
+    frame, _ = materialize_real_regression_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
     split_paths = regression_dataset_split_paths(dataset_name=dataset_name, root=split_root)
     for repeat_id in range(int(n_repeats)):
         manifest_path = split_paths.split_dir / f"repeat_{int(repeat_id):02d}.json"
@@ -203,6 +247,7 @@ def _validate_regression_dataset_ready(*, dataset_name: str, n_repeats: int, pro
         dataset = load_real_regression_dataset(
             dataset_name=dataset_name,
             repeat_id=int(repeat_id),
+            raw_root=raw_root,
             processed_root=processed_root,
             split_root=split_root,
         )
@@ -406,12 +451,16 @@ def _ensure_classification_dataset_ready(
     needs_prepare = not processed_paths.cleaned_table_path.exists() or not processed_paths.manifest_path.exists()
     if not needs_prepare:
         try:
-            _validate_processed_classification_artifacts(dataset_name=dataset_name, processed_root=processed_root)
+            _validate_processed_classification_artifacts(
+                dataset_name=dataset_name, raw_root=raw_root, processed_root=processed_root
+            )
         except Exception:
             needs_prepare = True
     if needs_prepare:
         prepare_real_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
-        _validate_processed_classification_artifacts(dataset_name=dataset_name, processed_root=processed_root)
+        _validate_processed_classification_artifacts(
+            dataset_name=dataset_name, raw_root=raw_root, processed_root=processed_root
+        )
 
     manifest_paths = [split_paths.split_dir / f"repeat_{int(i):02d}.json" for i in range(int(n_repeats))]
     needs_splits = any(not path.exists() for path in manifest_paths)
@@ -420,6 +469,7 @@ def _ensure_classification_dataset_ready(
             _validate_classification_dataset_ready(
                 dataset_name=dataset_name,
                 n_repeats=n_repeats,
+                raw_root=raw_root,
                 processed_root=processed_root,
                 split_root=split_root,
             )
@@ -440,6 +490,7 @@ def _ensure_classification_dataset_ready(
     _validate_classification_dataset_ready(
         dataset_name=dataset_name,
         n_repeats=n_repeats,
+        raw_root=raw_root,
         processed_root=processed_root,
         split_root=split_root,
     )
@@ -467,12 +518,16 @@ def _ensure_regression_dataset_ready(
     needs_prepare = not processed_paths.cleaned_table_path.exists() or not processed_paths.manifest_path.exists()
     if not needs_prepare:
         try:
-            _validate_processed_regression_artifacts(dataset_name=dataset_name, processed_root=processed_root)
+            _validate_processed_regression_artifacts(
+                dataset_name=dataset_name, raw_root=raw_root, processed_root=processed_root
+            )
         except Exception:
             needs_prepare = True
     if needs_prepare:
         prepare_real_regression_dataset(dataset_name=dataset_name, raw_root=raw_root, output_root=processed_root)
-        _validate_processed_regression_artifacts(dataset_name=dataset_name, processed_root=processed_root)
+        _validate_processed_regression_artifacts(
+            dataset_name=dataset_name, raw_root=raw_root, processed_root=processed_root
+        )
 
     manifest_paths = [split_paths.split_dir / f"repeat_{int(i):02d}.json" for i in range(int(n_repeats))]
     needs_splits = any(not path.exists() for path in manifest_paths)
@@ -481,6 +536,7 @@ def _ensure_regression_dataset_ready(
             _validate_regression_dataset_ready(
                 dataset_name=dataset_name,
                 n_repeats=n_repeats,
+                raw_root=raw_root,
                 processed_root=processed_root,
                 split_root=split_root,
             )
@@ -501,6 +557,7 @@ def _ensure_regression_dataset_ready(
     _validate_regression_dataset_ready(
         dataset_name=dataset_name,
         n_repeats=n_repeats,
+        raw_root=raw_root,
         processed_root=processed_root,
         split_root=split_root,
     )

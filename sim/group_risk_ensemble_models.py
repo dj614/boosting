@@ -17,7 +17,7 @@ from sklearn.metrics import log_loss, mean_squared_error
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from .ctb_core import ConsensusTransportBoosting
-from .ctb_semantics import ctb_tree_model_name, is_ctb_tree_family_name, normalize_ctb_tree_family_name
+from .ctb_semantics import ctb_family_output_name, ctb_tree_model_name, is_ctb_tree_family_name, normalize_ctb_tree_family_name
 
 try:  # pragma: no cover
     from xgboost import XGBClassifier, XGBRegressor
@@ -68,6 +68,13 @@ class EnsembleModelConfig:
             base = f"{base}_{str(self.task_type).strip().lower()}"
         return base
 
+    @property
+    def family_output_name(self) -> str:
+        return ctb_family_output_name(
+            family_name=self.family,
+            weak_learner_backend=self.ctb_weak_learner_backend,
+        )
+
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
 
@@ -96,7 +103,7 @@ class EnsembleWrapperBase:
 
     @property
     def family_name(self) -> str:
-        return normalize_ctb_tree_family_name(self.config.family)
+        return self.config.family_output_name
 
     @property
     def selection_metric_name(self) -> str:

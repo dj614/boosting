@@ -17,7 +17,7 @@ from sklearn.metrics import accuracy_score, log_loss, mean_squared_error
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from .ctb_core import ConsensusTransportBoosting
-from .ctb_semantics import ctb_tree_model_name, is_ctb_tree_family_name, normalize_ctb_tree_family_name
+from .ctb_semantics import ctb_family_output_name, ctb_tree_model_name, is_ctb_tree_family_name, normalize_ctb_tree_family_name
 
 try:  # pragma: no cover
     from xgboost import XGBClassifier, XGBRegressor
@@ -64,6 +64,13 @@ class TabularBenchmarkModelConfig:
                 include_task_suffix=False,
             )
         return f"{family}_depth{self.max_depth}"
+
+    @property
+    def family_output_name(self) -> str:
+        return ctb_family_output_name(
+            family_name=self.family,
+            weak_learner_backend=self.ctb_weak_learner_backend,
+        )
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

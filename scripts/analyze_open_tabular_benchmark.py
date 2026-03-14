@@ -34,7 +34,7 @@ DEFAULT_REGRESSION_METRICS = [
     "test_mae",
     "test_r2",
 ]
-DEFAULT_FAMILY_ORDER = ["bagging", "rf", "gbdt", "xgb", "ctb"]
+DEFAULT_FAMILY_ORDER = ["bagging", "rf", "gbdt", "xgb", "ctb_dt", "ctb_xgbtree", "ctb"]
 PRIMARY_METRIC = {
     "classification": "log_loss",
     "regression": "rmse",

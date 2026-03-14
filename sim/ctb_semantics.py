@@ -3,6 +3,16 @@ from __future__ import annotations
 from typing import Iterable, List
 
 
+_CTB_BACKEND_ALIASES = {
+    "sklearn_tree": "sklearn_tree",
+    "decision_tree": "sklearn_tree",
+    "dt": "sklearn_tree",
+    "xgb_tree": "xgb_tree",
+    "xgboost_tree": "xgb_tree",
+    "xgbstyle_tree": "xgb_tree",
+}
+
+
 _CTB_FAMILY_ALIASES = {
     "ctb": "ctb",
     "ctb_tree": "ctb",
@@ -28,6 +38,27 @@ def normalize_ctb_tree_family_name(name: object) -> str:
 
 def is_ctb_tree_family_name(name: object) -> bool:
     return normalize_ctb_tree_family_name(name) == "ctb"
+
+
+def normalize_ctb_weak_learner_backend(name: object) -> str:
+    cleaned = _clean_name(name)
+    return _CTB_BACKEND_ALIASES.get(cleaned, cleaned)
+
+
+def ctb_backend_bucket_name(name: object) -> str:
+    backend = normalize_ctb_weak_learner_backend(name)
+    if backend == "sklearn_tree":
+        return "ctb_dt"
+    if backend == "xgb_tree":
+        return "ctb_xgbtree"
+    return f"ctb_{backend}"
+
+
+def ctb_family_output_name(*, family_name: object, weak_learner_backend: object = "xgb_tree") -> str:
+    family = normalize_ctb_tree_family_name(family_name)
+    if family != "ctb":
+        return family
+    return ctb_backend_bucket_name(weak_learner_backend)
 
 
 def normalize_ctb_tree_family_sequence(names: Iterable[object]) -> List[str]:
@@ -56,9 +87,8 @@ def ctb_tree_model_name(
         raise ValueError("depth must be positive")
     base = f"ctb_depth{depth_i}"
     base = f"{base}__mode-{str(update_target_mode).strip()}__curv-{_format_curvature_eps(float(transport_curvature_eps))}"
-    backend = _clean_name(weak_learner_backend)
-    if backend != "sklearn_tree":
-        base = f"{base}__wl-{backend}"
+    backend = normalize_ctb_weak_learner_backend(weak_learner_backend)
+    base = f"{base}__wl-{backend}"
     if include_task_suffix:
         base = f"{base}_{str(task_type).strip().lower()}"
     return base
@@ -112,11 +142,18 @@ def canonical_ctb_tree_result_method(
     *,
     update_target_mode: str = "legacy",
     transport_curvature_eps: float = 1e-6,
+    weak_learner_backend: str = "xgb_tree",
 ) -> str:
     canonical = normalize_ctb_tree_method_name(method_name)
     if not canonical.startswith("ctb_"):
         return canonical
-    return f"{canonical}__mode-{str(update_target_mode).strip()}__curv-{_format_curvature_eps(float(transport_curvature_eps))}"
+    backend = normalize_ctb_weak_learner_backend(weak_learner_backend)
+    return (
+        f"{canonical}"
+        f"__mode-{str(update_target_mode).strip()}"
+        f"__curv-{_format_curvature_eps(float(transport_curvature_eps))}"
+        f"__wl-{backend}"
+    )
 
 
 def sparse_recovery_support_semantics(name: object) -> str:

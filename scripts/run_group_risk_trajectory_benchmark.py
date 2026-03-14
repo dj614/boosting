@@ -439,7 +439,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
             dataset_name=dataset.dataset_name,
             split=split_name,
             seed=seed,
-            family_name=normalize_ctb_tree_family_name(model_config.family),
+            family_name=model_config.family_output_name,
             model_name=model_config.model_name,
             selected_checkpoint=int(wrapper.selected_checkpoint_),
         )
@@ -448,7 +448,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
         group_df = evaluation["group_metrics"].copy()
         group_df.insert(0, "selected_checkpoint", int(wrapper.selected_checkpoint_))
         group_df.insert(0, "model_name", model_config.model_name)
-        group_df.insert(0, "family_name", normalize_ctb_tree_family_name(model_config.family))
+        group_df.insert(0, "family_name", model_config.family_output_name)
         group_df.insert(0, "seed", int(seed))
         group_df.insert(0, "split", split_name)
         group_df.insert(0, "dataset_name", dataset.dataset_name)
@@ -486,7 +486,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
                 split=split_name,
                 seed=seed,
                 model_name=model_config.model_name,
-                family_name=normalize_ctb_tree_family_name(model_config.family),
+                family_name=model_config.family_output_name,
                 group=split.group,
                 y_true=split.y,
                 y_pred=prediction,
@@ -507,7 +507,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
                 dataset_name=dataset.dataset_name,
                 split_name=split_name,
                 seed=seed,
-                family_name=normalize_ctb_tree_family_name(model_config.family),
+                family_name=model_config.family_output_name,
                 model_name=model_config.model_name,
                 selected_checkpoint=int(wrapper.selected_checkpoint_),
                 split=split,
@@ -520,7 +520,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
                 dataset_name=dataset.dataset_name,
                 split_name=split_name,
                 seed=seed,
-                family_name=normalize_ctb_tree_family_name(model_config.family),
+                family_name=model_config.family_output_name,
                 model_name=model_config.model_name,
                 selected_checkpoint=int(wrapper.selected_checkpoint_),
                 split=split,
@@ -533,7 +533,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
             dataset_name=dataset.dataset_name,
             split_name=split_name,
             seed=seed,
-            family_name=normalize_ctb_tree_family_name(model_config.family),
+            family_name=model_config.family_output_name,
             model_name=model_config.model_name,
             selected_checkpoint=int(wrapper.selected_checkpoint_),
             split=split,

@@ -54,6 +54,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-target-modes", nargs="*", default=["legacy"])
     parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
     parser.add_argument("--ctb-min-samples-leaf", type=int, default=5)
+    parser.add_argument("--ctb-weak-learner-backend", choices=["sklearn_tree", "xgb_tree"], default="xgb_tree")
     parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--save-pointwise", action="store_true", help="Save pointwise mean predictions for downstream geometry plots.")
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment1_instability"))
@@ -114,6 +115,7 @@ def _expand_method_specs(
                             canonical_method,
                             update_target_mode=str(target_mode),
                             transport_curvature_eps=float(curvature_eps),
+                            weak_learner_backend=str(spec_kwargs.get("ctb_weak_learner_backend", "xgb_tree")),
                         ),
                         "spec_kwargs": spec_kwargs,
                     }
@@ -297,6 +299,7 @@ def main() -> None:
         "ctb_target_modes": list(args.ctb_target_modes),
         "ctb_curvature_eps": [float(x) for x in args.ctb_curvature_eps],
         "ctb_min_samples_leaf": args.ctb_min_samples_leaf,
+        "ctb_weak_learner_backend": args.ctb_weak_learner_backend,
         "save_pointwise": bool(args.save_pointwise),
     }
     save_json(config, outdir / "run_config.json")
@@ -311,6 +314,7 @@ def main() -> None:
         "ctb_target_mode": str(args.ctb_target_modes[0]),
         "ctb_curvature_eps": float(args.ctb_curvature_eps[0]),
         "ctb_min_samples_leaf": int(args.ctb_min_samples_leaf),
+        "ctb_weak_learner_backend": str(args.ctb_weak_learner_backend),
     }
 
     trial_rows: List[Dict[str, object]] = []

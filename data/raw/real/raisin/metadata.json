@@ -1,0 +1,18 @@
+{
+  "archive_member": "Raisin_Dataset/Raisin_Dataset.xlsx",
+  "dataset_name": "raisin",
+  "default_group_rules": [
+    "difficulty_group"
+  ],
+  "extracted_dir": "data\\raw\\real\\raisin\\extracted",
+  "extracted_members": [
+    "Raisin_Dataset.zip"
+  ],
+  "notes": "Raisin dataset from the UCI Machine Learning Repository.",
+  "positive_label": "Kecimen",
+  "raw_archive_path": "data\\raw\\real\\raisin\\source_archive.zip",
+  "source_type": "uci_archive",
+  "target_column": "Class",
+  "task_type": "binary_classification",
+  "uci_download_url": "https://archive.ics.uci.edu/static/public/850/raisin.zip"
+}

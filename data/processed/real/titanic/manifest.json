@@ -1,0 +1,81 @@
+{
+  "categorical_columns": [
+    "name",
+    "sex",
+    "ticket",
+    "cabin",
+    "embarked",
+    "boat",
+    "home.dest"
+  ],
+  "class_balance": {
+    "negative_rate": 0.6180290297937356,
+    "positive_rate": 0.3819709702062643
+  },
+  "cleaned_table_is_sample": true,
+  "dataset_name": "titanic",
+  "default_group_rules": [
+    "sex",
+    "pclass",
+    "sex_pclass",
+    "difficulty_group"
+  ],
+  "feature_columns": [
+    "pclass",
+    "name",
+    "sex",
+    "age",
+    "sibsp",
+    "parch",
+    "ticket",
+    "fare",
+    "cabin",
+    "embarked",
+    "boat",
+    "body",
+    "home.dest"
+  ],
+  "missing_per_column": {
+    "age": 263,
+    "boat": 823,
+    "body": 1188,
+    "cabin": 1014,
+    "embarked": 2,
+    "fare": 1,
+    "home.dest": 564
+  },
+  "n_columns": 15,
+  "n_feature_columns": 13,
+  "n_rows": 1309,
+  "notes": "Original Titanic tabular dataset from OpenML.",
+  "numeric_columns": [
+    "pclass",
+    "age",
+    "sibsp",
+    "parch",
+    "fare",
+    "body"
+  ],
+  "positive_aliases": [
+    "1",
+    "yes",
+    "true",
+    "survived"
+  ],
+  "positive_label": "1",
+  "processed_target_column": "__target__",
+  "raw_target_column": "survived",
+  "resolved_raw_target_column": "survived",
+  "sample_id_column": "__sample_id__",
+  "source_type": "openml",
+  "stored_cleaned_sample_rows": 5,
+  "target_mapping": {
+    "observed_labels": [
+      "0",
+      "1"
+    ],
+    "observed_negative_label": "0",
+    "observed_positive_label": "1"
+  },
+  "task_type": "binary_classification"
+}

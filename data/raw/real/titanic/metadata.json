@@ -1,0 +1,38 @@
+{
+  "dataset_name": "titanic",
+  "default_group_rules": [
+    "sex",
+    "pclass",
+    "sex_pclass",
+    "difficulty_group"
+  ],
+  "n_columns": 14,
+  "n_rows": 1309,
+  "notes": "Original Titanic tabular dataset from OpenML.",
+  "openml_data_id": null,
+  "openml_name": "Titanic",
+  "openml_version": 1,
+  "positive_label": "1",
+  "raw_columns": [
+    "pclass",
+    "survived",
+    "name",
+    "sex",
+    "age",
+    "sibsp",
+    "parch",
+    "ticket",
+    "fare",
+    "cabin",
+    "embarked",
+    "boat",
+    "body",
+    "home.dest"
+  ],
+  "raw_table_is_sample": true,
+  "raw_table_path": "data\\raw\\real\\titanic\\raw_table.csv",
+  "raw_table_sample_rows": 5,
+  "source_type": "openml",
+  "target_column": "survived",
+  "task_type": "binary_classification"
+}

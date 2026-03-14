@@ -1,0 +1,48 @@
+{
+  "categorical_columns": [],
+  "class_balance": {
+    "negative_rate": 0.7620320855614973,
+    "positive_rate": 0.23796791443850268
+  },
+  "cleaned_table_is_sample": true,
+  "dataset_name": "blood",
+  "default_group_rules": [
+    "difficulty_group"
+  ],
+  "feature_columns": [
+    "V1",
+    "V2",
+    "V3",
+    "V4"
+  ],
+  "missing_per_column": {},
+  "n_columns": 6,
+  "n_feature_columns": 4,
+  "n_rows": 748,
+  "notes": "Blood Transfusion Service Center dataset from OpenML.",
+  "numeric_columns": [
+    "V1",
+    "V2",
+    "V3",
+    "V4"
+  ],
+  "positive_aliases": [
+    "2"
+  ],
+  "positive_label": "2",
+  "processed_target_column": "__target__",
+  "raw_target_column": "Class",
+  "resolved_raw_target_column": "Class",
+  "sample_id_column": "__sample_id__",
+  "source_type": "openml",
+  "stored_cleaned_sample_rows": 5,
+  "target_mapping": {
+    "observed_labels": [
+      "1",
+      "2"
+    ],
+    "observed_negative_label": "1",
+    "observed_positive_label": "2"
+  },
+  "task_type": "binary_classification"
+}

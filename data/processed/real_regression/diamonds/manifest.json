@@ -1,0 +1,58 @@
+{
+  "categorical_columns": [
+    "cut",
+    "color",
+    "clarity"
+  ],
+  "cleaned_table_is_sample": true,
+  "dataset_name": "diamonds",
+  "default_split_strategy": "quantile_stratified",
+  "feature_columns": [
+    "carat",
+    "cut",
+    "color",
+    "clarity",
+    "depth",
+    "table",
+    "x",
+    "y",
+    "z"
+  ],
+  "missing_per_column": {},
+  "n_columns": 11,
+  "n_feature_columns": 9,
+  "n_rows": 53940,
+  "notes": "Diamonds price regression benchmark based on the canonical seaborn dataset.",
+  "numeric_columns": [
+    "carat",
+    "depth",
+    "table",
+    "x",
+    "y",
+    "z"
+  ],
+  "processed_target_column": "__target__",
+  "raw_target_column": "price",
+  "requested_feature_columns": [
+    "carat",
+    "cut",
+    "color",
+    "clarity",
+    "depth",
+    "table",
+    "x",
+    "y",
+    "z"
+  ],
+  "resolved_raw_target_column": "price",
+  "sample_id_column": "__sample_id__",
+  "source_type": "manual_download",
+  "stored_cleaned_sample_rows": 5,
+  "target_summary": {
+    "max": 18823.0,
+    "mean": 3932.799721913237,
+    "min": 326.0,
+    "std": 3989.4027576288736
+  },
+  "task_type": "regression"
+}

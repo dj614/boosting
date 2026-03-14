@@ -1,0 +1,54 @@
+{
+  "categorical_columns": [],
+  "cleaned_table_is_sample": true,
+  "dataset_name": "california_housing",
+  "default_split_strategy": "quantile_stratified",
+  "feature_columns": [
+    "MedInc",
+    "HouseAge",
+    "AveRooms",
+    "AveBedrms",
+    "Population",
+    "AveOccup",
+    "Latitude",
+    "Longitude"
+  ],
+  "missing_per_column": {},
+  "n_columns": 10,
+  "n_feature_columns": 8,
+  "n_rows": 20640,
+  "notes": "California housing regression benchmark from scikit-learn.",
+  "numeric_columns": [
+    "MedInc",
+    "HouseAge",
+    "AveRooms",
+    "AveBedrms",
+    "Population",
+    "AveOccup",
+    "Latitude",
+    "Longitude"
+  ],
+  "processed_target_column": "__target__",
+  "raw_target_column": "MedHouseVal",
+  "requested_feature_columns": [
+    "MedInc",
+    "HouseAge",
+    "AveRooms",
+    "AveBedrms",
+    "Population",
+    "AveOccup",
+    "Latitude",
+    "Longitude"
+  ],
+  "resolved_raw_target_column": "MedHouseVal",
+  "sample_id_column": "__sample_id__",
+  "source_type": "sklearn",
+  "stored_cleaned_sample_rows": 5,
+  "target_summary": {
+    "max": 5.00001,
+    "mean": 2.068558169089147,
+    "min": 0.14999,
+    "std": 1.1539282040412253
+  },
+  "task_type": "regression"
+}

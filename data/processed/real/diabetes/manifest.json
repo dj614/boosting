@@ -1,0 +1,60 @@
+{
+  "categorical_columns": [],
+  "class_balance": {
+    "negative_rate": 0.6510416666666667,
+    "positive_rate": 0.3489583333333333
+  },
+  "cleaned_table_is_sample": true,
+  "dataset_name": "diabetes",
+  "default_group_rules": [
+    "difficulty_group"
+  ],
+  "feature_columns": [
+    "preg",
+    "plas",
+    "pres",
+    "skin",
+    "insu",
+    "mass",
+    "pedi",
+    "age"
+  ],
+  "missing_per_column": {},
+  "n_columns": 10,
+  "n_feature_columns": 8,
+  "n_rows": 768,
+  "notes": "Pima Indians Diabetes dataset from OpenML.",
+  "numeric_columns": [
+    "preg",
+    "plas",
+    "pres",
+    "skin",
+    "insu",
+    "mass",
+    "pedi",
+    "age"
+  ],
+  "positive_aliases": [
+    "tested_positive",
+    "positive",
+    "1",
+    "true",
+    "yes"
+  ],
+  "positive_label": "tested_positive",
+  "processed_target_column": "__target__",
+  "raw_target_column": "class",
+  "resolved_raw_target_column": "class",
+  "sample_id_column": "__sample_id__",
+  "source_type": "openml",
+  "stored_cleaned_sample_rows": 5,
+  "target_mapping": {
+    "observed_labels": [
+      "tested_negative",
+      "tested_positive"
+    ],
+    "observed_negative_label": "tested_negative",
+    "observed_positive_label": "tested_positive"
+  },
+  "task_type": "binary_classification"
+}

@@ -1,0 +1,24 @@
+{
+  "dataset_name": "diamonds",
+  "n_columns": 10,
+  "n_rows": 53940,
+  "notes": "Diamonds price regression benchmark based on the canonical seaborn dataset.",
+  "raw_columns": [
+    "carat",
+    "cut",
+    "color",
+    "clarity",
+    "depth",
+    "table",
+    "price",
+    "x",
+    "y",
+    "z"
+  ],
+  "raw_table_is_sample": true,
+  "raw_table_path": "data\\raw\\real_regression\\diamonds\\raw_table.csv",
+  "raw_table_sample_rows": 5,
+  "source_type": "manual_download",
+  "target_column": "price",
+  "task_type": "regression"
+}

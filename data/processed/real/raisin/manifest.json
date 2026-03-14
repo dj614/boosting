@@ -1,0 +1,57 @@
+{
+  "categorical_columns": [],
+  "class_balance": {
+    "negative_rate": 0.5,
+    "positive_rate": 0.5
+  },
+  "cleaned_table_is_sample": true,
+  "dataset_name": "raisin",
+  "default_group_rules": [
+    "difficulty_group"
+  ],
+  "feature_columns": [
+    "Area",
+    "MajorAxisLength",
+    "MinorAxisLength",
+    "Eccentricity",
+    "ConvexArea",
+    "Extent",
+    "Perimeter"
+  ],
+  "missing_per_column": {},
+  "n_columns": 9,
+  "n_feature_columns": 7,
+  "n_rows": 900,
+  "notes": "Raisin dataset from the UCI Machine Learning Repository.",
+  "numeric_columns": [
+    "Area",
+    "MajorAxisLength",
+    "MinorAxisLength",
+    "Eccentricity",
+    "ConvexArea",
+    "Extent",
+    "Perimeter"
+  ],
+  "positive_aliases": [
+    "kecimen",
+    "1",
+    "true",
+    "yes"
+  ],
+  "positive_label": "Kecimen",
+  "processed_target_column": "__target__",
+  "raw_target_column": "Class",
+  "resolved_raw_target_column": "Class",
+  "sample_id_column": "__sample_id__",
+  "source_type": "uci_archive",
+  "stored_cleaned_sample_rows": 5,
+  "target_mapping": {
+    "observed_labels": [
+      "besni",
+      "kecimen"
+    ],
+    "observed_negative_label": "besni",
+    "observed_positive_label": "kecimen"
+  },
+  "task_type": "binary_classification"
+}

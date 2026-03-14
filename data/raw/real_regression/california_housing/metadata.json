@@ -1,0 +1,24 @@
+{
+  "dataset_name": "california_housing",
+  "n_columns": 9,
+  "n_rows": 20640,
+  "notes": "California housing regression benchmark from scikit-learn.",
+  "raw_columns": [
+    "MedInc",
+    "HouseAge",
+    "AveRooms",
+    "AveBedrms",
+    "Population",
+    "AveOccup",
+    "Latitude",
+    "Longitude",
+    "MedHouseVal"
+  ],
+  "raw_table_is_sample": true,
+  "raw_table_path": "data\\raw\\real_regression\\california_housing\\raw_table.csv",
+  "raw_table_sample_rows": 5,
+  "sklearn_dataset_name": "fetch_california_housing",
+  "source_type": "sklearn",
+  "target_column": "MedHouseVal",
+  "task_type": "regression"
+}

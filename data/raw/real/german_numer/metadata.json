@@ -1,0 +1,42 @@
+{
+  "dataset_name": "german_numer",
+  "default_group_rules": [
+    "difficulty_group"
+  ],
+  "n_columns": 21,
+  "n_rows": 1000,
+  "notes": "German credit risk dataset from OpenML credit-g.",
+  "openml_data_id": null,
+  "openml_name": "credit-g",
+  "openml_version": 1,
+  "positive_label": "good",
+  "raw_columns": [
+    "checking_status",
+    "duration",
+    "credit_history",
+    "purpose",
+    "credit_amount",
+    "savings_status",
+    "employment",
+    "installment_commitment",
+    "personal_status",
+    "other_parties",
+    "residence_since",
+    "property_magnitude",
+    "age",
+    "other_payment_plans",
+    "housing",
+    "existing_credits",
+    "job",
+    "num_dependents",
+    "own_telephone",
+    "foreign_worker",
+    "class"
+  ],
+  "raw_table_is_sample": true,
+  "raw_table_path": "data\\raw\\real\\german_numer\\raw_table.csv",
+  "raw_table_sample_rows": 5,
+  "source_type": "openml",
+  "target_column": "class",
+  "task_type": "binary_classification"
+}

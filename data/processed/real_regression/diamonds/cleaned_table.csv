@@ -1,0 +1,6 @@
+__sample_id__,__target__,carat,cut,color,clarity,depth,table,x,y,z
+diamonds_000000,326.0,0.23,Ideal,E,SI2,61.5,55.0,3.95,3.98,2.43
+diamonds_000001,326.0,0.21,Premium,E,SI1,59.8,61.0,3.89,3.84,2.31
+diamonds_000002,327.0,0.23,Good,E,VS1,56.9,65.0,4.05,4.07,2.31
+diamonds_000003,334.0,0.29,Premium,I,VS2,62.4,58.0,4.2,4.23,2.63
+diamonds_000004,335.0,0.31,Good,J,SI2,63.3,58.0,4.34,4.35,2.75

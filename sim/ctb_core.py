@@ -21,8 +21,8 @@ class ConsensusTransportBoosting(BaseEstimator):
     """Minimal CTB implementation for regression and binary classification.
 
     The weak learner is a regressor fit to the current pseudo-response. By default
-    this is a sklearn regression tree, but an xgboost single-tree regressor can be
-    requested via ``weak_learner_backend='xgb_tree'``. For binary classification,
+    this is an xgboost single-tree regressor by default; a sklearn
+    regression tree can be requested via ``weak_learner_backend='sklearn_tree'``. For binary classification,
     the ensemble state is maintained on the raw score scale and probabilities are
     obtained via a sigmoid link.
     """
@@ -42,7 +42,7 @@ class ConsensusTransportBoosting(BaseEstimator):
         denom_eps: float = 1e-12,
         max_depth: int | None = 1,
         min_samples_leaf: int = 5,
-        weak_learner_backend: WeakLearnerBackend = "sklearn_tree",
+        weak_learner_backend: WeakLearnerBackend = "xgb_tree",
         xgb_learning_rate: float = 0.1,
         xgb_subsample: float = 1.0,
         xgb_colsample_bytree: float = 0.8,

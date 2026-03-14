@@ -48,7 +48,7 @@ def ctb_tree_model_name(
     task_type: str = "regression",
     update_target_mode: str = "legacy",
     transport_curvature_eps: float = 1e-6,
-    weak_learner_backend: str = "sklearn_tree",
+    weak_learner_backend: str = "xgb_tree",
     include_task_suffix: bool = True,
 ) -> str:
     depth_i = int(depth)

@@ -149,7 +149,7 @@ class CTBTreeConfig:
     weight_eps: float = 1e-8
     update_target_mode: str = "legacy"
     transport_curvature_eps: float = 1e-6
-    weak_learner_backend: str = "sklearn_tree"
+    weak_learner_backend: str = "xgb_tree"
     learning_rate: float = 0.05
     subsample: float = 0.9
     colsample_bytree: float = 0.9

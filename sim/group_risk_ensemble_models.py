@@ -46,7 +46,7 @@ class EnsembleModelConfig:
     weight_eps: float = 1e-8
     ctb_target_mode: str = "legacy"
     ctb_curvature_eps: float = 1e-6
-    ctb_weak_learner_backend: str = "sklearn_tree"
+    ctb_weak_learner_backend: str = "xgb_tree"
     ctb_xgb_reg_lambda: float = 1.0
     ctb_xgb_min_child_weight: float = 1.0
     random_state: int = 0

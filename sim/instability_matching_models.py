@@ -73,7 +73,7 @@ def make_default_learner_specs(
     ctb_target_mode: str = "legacy",
     ctb_curvature_eps: float = 1e-6,
     ctb_min_samples_leaf: int = 5,
-    ctb_weak_learner_backend: str = "sklearn_tree",
+    ctb_weak_learner_backend: str = "xgb_tree",
     ctb_xgb_learning_rate: float = 0.05,
     ctb_xgb_subsample: float = 0.9,
     ctb_xgb_colsample_bytree: float = 0.9,

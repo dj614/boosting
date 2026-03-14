@@ -506,9 +506,13 @@ FAMILY_DEFAULTS = {
         "eta": (1.0,),
     },
     "ctb": {
+        "max_depths": (1, 3),
+        "min_samples_leafs": (5,),
         "learning_rate": (0.1,),
         "subsample": (1.0,),
         "colsample_bytree": (0.8,),
+        "inner_bootstraps": (2, 4),
+        "eta": (1.0,),
     },
 }
 
@@ -541,6 +545,8 @@ def expand_tabular_model_grid(
         if family not in FAMILY_DEFAULTS:
             raise ValueError(f"Unsupported family={family!r}")
         default_overrides = FAMILY_DEFAULTS[family]
+        family_max_depths = tuple(default_overrides.get("max_depths", max_depths))
+        family_min_samples_leafs = tuple(default_overrides.get("min_samples_leafs", min_samples_leafs))
         family_learning_rates = tuple(default_overrides.get("learning_rate", learning_rates))
         family_subsamples = tuple(default_overrides.get("subsample", subsamples))
         family_colsample = tuple(default_overrides.get("colsample_bytree", colsample_bytree))
@@ -553,8 +559,8 @@ def expand_tabular_model_grid(
             family_ctb_curvature_eps = (float(family_ctb_curvature_eps[0]),)
 
         if family in {"bagging", "rf"}:
-            for depth in max_depths:
-                for leaf in min_samples_leafs:
+            for depth in family_max_depths:
+                for leaf in family_min_samples_leafs:
                     grid.append(
                         TabularBenchmarkModelConfig(
                             task_type=task_type,
@@ -578,7 +584,7 @@ def expand_tabular_model_grid(
             continue
 
         if family in {"gbdt", "xgb"}:
-            for depth in max_depths:
+            for depth in family_max_depths:
                 for lr in family_learning_rates:
                     for subsample in family_subsamples:
                         for colsample in family_colsample:
@@ -588,7 +594,7 @@ def expand_tabular_model_grid(
                                     family=family,
                                     max_depth=int(depth),
                                     n_estimators=int(n_estimators),
-                                    min_samples_leaf=int(min_samples_leafs[0]),
+                                    min_samples_leaf=int(family_min_samples_leafs[0]),
                                     learning_rate=float(lr),
                                     subsample=float(subsample),
                                     colsample_bytree=float(colsample),
@@ -602,8 +608,8 @@ def expand_tabular_model_grid(
                             )
             continue
         if family == "ctb":
-            for depth in max_depths:
-                for leaf in min_samples_leafs:
+            for depth in family_max_depths:
+                for leaf in family_min_samples_leafs:
                     for inner_bootstrap in family_inner_bootstraps:
                         for eta in family_etas:
                             for target_mode in family_ctb_target_modes:

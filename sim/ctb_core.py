@@ -79,8 +79,20 @@ class ConsensusTransportBoosting(BaseEstimator):
 
     def _loss_geometry(self, y: np.ndarray, score: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         if self.task_type == "regression":
-            first_order = np.asarray(y, dtype=float) - np.asarray(score, dtype=float)
-            curvature = np.ones_like(first_order, dtype=float)
+            residual = np.asarray(y, dtype=float) - np.asarray(score, dtype=float)
+            if self.update_target_mode != "loss_aware":
+                curvature = np.ones_like(residual, dtype=float)
+                return residual, curvature
+
+            # Use a smooth robust-regression geometry so regression loss-aware
+            # has sample-dependent curvature instead of collapsing to plain residual fitting.
+            residual_center = float(np.median(residual))
+            residual_mad = float(np.median(np.abs(residual - residual_center)))
+            delta = max(residual_mad, self.transport_curvature_eps)
+            scaled = residual / delta
+            denom = np.sqrt(1.0 + scaled**2)
+            first_order = residual / denom
+            curvature = 1.0 / np.power(1.0 + scaled**2, 1.5)
             return first_order, curvature
         proba = self._sigmoid(score)
         first_order = np.asarray(y, dtype=float) - proba
@@ -163,7 +175,6 @@ class ConsensusTransportBoosting(BaseEstimator):
 
         self.learners_ = []
         self.alphas_ = []
-        self.train_score_path_ = []
         self.n_features_in_ = X.shape[1]
 
         for _ in range(self.n_estimators):
@@ -196,7 +207,6 @@ class ConsensusTransportBoosting(BaseEstimator):
             train_score = train_score + alpha * consensus
             self.learners_.append(round_learners)
             self.alphas_.append(float(alpha))
-            self.train_score_path_.append(train_score.copy())
 
         self.alphas_ = np.asarray(self.alphas_, dtype=float)
         self.train_score_ = train_score

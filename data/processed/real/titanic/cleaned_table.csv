@@ -1,6 +1,0 @@
-__sample_id__,__target__,pclass,name,sex,age,sibsp,parch,ticket,fare,cabin,embarked,boat,body,home.dest
-titanic_000000,1,1,"Allen, Miss. Elisabeth Walton",female,29.0,0,0,24160,211.3375,B5,S,2,,"St Louis, MO"
-titanic_000001,1,1,"Allison, Master. Hudson Trevor",male,0.9167,1,2,113781,151.55,C22 C26,S,11,,"Montreal, PQ / Chesterville, ON"
-titanic_000002,0,1,"Allison, Miss. Helen Loraine",female,2.0,1,2,113781,151.55,C22 C26,S,,,"Montreal, PQ / Chesterville, ON"
-titanic_000003,0,1,"Allison, Mr. Hudson Joshua Creighton",male,30.0,1,2,113781,151.55,C22 C26,S,,135.0,"Montreal, PQ / Chesterville, ON"
-titanic_000004,0,1,"Allison, Mrs. Hudson J C (Bessie Waldo Daniels)",female,25.0,1,2,113781,151.55,C22 C26,S,,,"Montreal, PQ / Chesterville, ON"

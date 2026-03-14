@@ -22,6 +22,7 @@ if alias_src.exists() and "sim.experiment1_step3_analysis" not in sys.modules:
 
 import numpy as np
 
+from sim.ctb_semantics import ctb_semantic_role, sparse_recovery_support_semantics
 from sim.sparse_recovery_data import generate_sparse_regression_dataset
 from sim.sparse_recovery_models import build_experiment4_model
 
@@ -40,8 +41,8 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["l2boost", "bagged_componentwise", "ctb_sparse", "lasso"],
-        choices=["l2boost", "bagged_componentwise", "ctb_sparse", "lasso", "xgb_tree"],
+        default=["l2boost", "bagged_componentwise", "ctb_sparse", "ctb_tree", "lasso"],
+        choices=["l2boost", "bagged_componentwise", "ctb_sparse", "ctb_tree", "lasso", "xgb_tree"],
     )
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment4_model_check"))
     return parser
@@ -57,7 +58,13 @@ def _summarize_model(model_name: str, model, dataset) -> dict:
         "test_mse": test_mse,
         "selected_support_size": int(support_hat.shape[0]),
         "selected_support_head": support_hat[: min(10, support_hat.shape[0])].tolist(),
+        "support_semantic_role": sparse_recovery_support_semantics(model_name),
+        "ctb_semantic_role": ctb_semantic_role(model_name),
     }
+    if hasattr(model, "feature_importances_") and getattr(model, "feature_importances_", None) is not None:
+        summary["has_feature_importances"] = 1
+    if hasattr(model, "selection_frequency_") and getattr(model, "selection_frequency_", None) is not None:
+        summary["has_selection_frequency"] = 1
     if hasattr(model, "selected_step_") and getattr(model, "selected_step_", None) is not None:
         summary["selected_step"] = int(model.selected_step_)
     if hasattr(model, "selected_checkpoint_") and getattr(model, "selected_checkpoint_", None) is not None:

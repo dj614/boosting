@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from sim.ctb_semantics import normalize_ctb_tree_family_name
+
 PAIR_RE = re.compile(r"^(?P<family>[A-Za-z0-9_]+)_depth(?P<depth>\d+)")
 
 
@@ -60,6 +62,14 @@ def _save_table(df: pd.DataFrame, path: Path) -> None:
     df.to_csv(path, index=False)
 
 
+def _normalize_family_column(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "family_name" not in df.columns:
+        return df
+    out = df.copy()
+    out["family_name"] = out["family_name"].map(normalize_ctb_tree_family_name)
+    return out
+
+
 def _task_metric_spec(task_type: str) -> Dict[str, str]:
     if task_type == "classification":
         return {
@@ -82,7 +92,7 @@ def _parse_model_name(model_name: str) -> Tuple[str, int | None]:
     m = PAIR_RE.match(str(model_name))
     if m is None:
         return str(model_name).split("__", 1)[0], None
-    return str(m.group("family")), int(m.group("depth"))
+    return normalize_ctb_tree_family_name(str(m.group("family"))), int(m.group("depth"))
 
 
 def _infer_focus_pairs(model_names: Sequence[str]) -> List[Tuple[str, str, str]]:
@@ -253,10 +263,10 @@ def main() -> None:
     outdir = args.outdir or (input_dir / "analysis")
     outdir.mkdir(parents=True, exist_ok=True)
 
-    metrics_summary = _read_if_exists(input_dir / "metrics_summary.csv")
-    metrics_summary_family = _read_if_exists(input_dir / "metrics_summary_family_selected.csv")
-    group_metrics_summary = _read_if_exists(input_dir / "group_metrics_summary.csv")
-    group_metrics_family = _read_if_exists(input_dir / "group_metrics_summary_family_selected.csv")
+    metrics_summary = _normalize_family_column(_read_if_exists(input_dir / "metrics_summary.csv"))
+    metrics_summary_family = _normalize_family_column(_read_if_exists(input_dir / "metrics_summary_family_selected.csv"))
+    group_metrics_summary = _normalize_family_column(_read_if_exists(input_dir / "group_metrics_summary.csv"))
+    group_metrics_family = _normalize_family_column(_read_if_exists(input_dir / "group_metrics_summary_family_selected.csv"))
     trajectory_core = _concat_csvs(list(input_dir.glob("**/trajectory_core.csv")))
     trajectory_groups = _concat_csvs(list(input_dir.glob("**/trajectory_groups.csv")))
     predictions = _concat_csvs(list(input_dir.glob(f"**/predictions_{args.split}.csv")))

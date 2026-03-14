@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from progress_utils import tqdm_iter
+from sim.ctb_semantics import ctb_semantic_role, sparse_recovery_family_semantic_bucket, sparse_recovery_support_semantics
 from sim.sparse_recovery_eval import aggregate_metric_table, make_feature_support_frame, stability_selection_metrics
 
 
@@ -91,6 +92,36 @@ def _feature_frequency_tables(trial_df: pd.DataFrame, outdir: Path, top_features
     return manifest
 
 
+
+
+def _attach_semantic_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "family_name" not in frame.columns:
+        return frame
+    out = frame.copy()
+    family_series = out["family_name"].astype(str)
+    out["support_semantic_role"] = family_series.map(sparse_recovery_support_semantics)
+    out["family_semantic_bucket"] = family_series.map(sparse_recovery_family_semantic_bucket)
+    out["ctb_semantic_role"] = family_series.map(ctb_semantic_role)
+    return out
+
+
+def _family_semantic_manifest(trial_df: pd.DataFrame) -> pd.DataFrame:
+    if trial_df.empty or "family_name" not in trial_df.columns:
+        return pd.DataFrame(columns=["family_name", "support_semantic_role", "family_semantic_bucket", "ctb_semantic_role", "support_eval_modes"])
+    rows: List[Dict[str, object]] = []
+    for family_name, sub_df in trial_df.groupby("family_name", dropna=False):
+        support_modes = sorted(sub_df["support_eval_mode"].dropna().astype(str).unique().tolist()) if "support_eval_mode" in sub_df.columns else []
+        rows.append(
+            {
+                "family_name": str(family_name),
+                "support_semantic_role": sparse_recovery_support_semantics(str(family_name)),
+                "family_semantic_bucket": sparse_recovery_family_semantic_bucket(str(family_name)),
+                "ctb_semantic_role": ctb_semantic_role(str(family_name)),
+                "support_eval_modes": json.dumps(support_modes),
+            }
+        )
+    return pd.DataFrame(rows).sort_values(["family_semantic_bucket", "family_name"]).reset_index(drop=True)
+
 def _task_primary_columns(task_type: str) -> tuple[str, str, str]:
     if task_type == "classification":
         return "valid_log_loss", "test_log_loss", "support_f1"
@@ -142,22 +173,25 @@ def main() -> None:
         trial_path = input_dir / "trial_metrics.csv"
     if not trial_path.exists():
         raise FileNotFoundError(f"Missing trial metrics file: {trial_path}")
-    trial_df = pd.read_csv(trial_path)
+    trial_df = _attach_semantic_columns(pd.read_csv(trial_path))
     if trial_df.empty:
         raise ValueError(f"{trial_path.name} is empty")
 
     summary_df = aggregate_metric_table(
         trial_df,
-        group_cols=["task_type", "design", "family_name", "model_name", "support_eval_mode"],
+        group_cols=["task_type", "design", "family_name", "model_name", "support_eval_mode", "support_semantic_role", "family_semantic_bucket", "ctb_semantic_role"],
         sort_by="test_mse_mean" if "test_mse" in trial_df.columns else "test_log_loss_mean",
         ascending=True,
     )
-    stability_df = _stability_frame(trial_df)
-    merged_df = summary_df.merge(stability_df, on=["task_type", "design", "family_name"], how="left")
+    stability_df = _attach_semantic_columns(_stability_frame(trial_df))
+    merged_df = _attach_semantic_columns(summary_df.merge(stability_df, on=["task_type", "design", "family_name", "support_semantic_role", "family_semantic_bucket", "ctb_semantic_role"], how="left"))
     _save_table(summary_df, outdir / "model_summary.csv")
     _save_table(stability_df, outdir / "stability_summary.csv")
     _save_table(merged_df, outdir / "merged_summary.csv")
 
+
+    family_semantics_df = _family_semantic_manifest(trial_df)
+    _save_table(family_semantics_df, outdir / "family_semantics.csv")
 
     feature_manifest = _feature_frequency_tables(trial_df, outdir=outdir, top_features=args.top_features)
 
@@ -199,7 +233,7 @@ def main() -> None:
         "task_types": sorted(trial_df["task_type"].dropna().astype(str).unique().tolist()),
         "designs": sorted(trial_df["design"].dropna().astype(str).unique().tolist()),
         "families": sorted(trial_df["family_name"].dropna().astype(str).unique().tolist()) if "family_name" in trial_df.columns else [],
-        "families": sorted(trial_df["family_name"].dropna().astype(str).unique().tolist()),
+        "family_semantics": family_semantics_df.to_dict(orient="records"),
         "design_summary": manifest_rows,
         "feature_frequency_manifest": feature_manifest,
     }

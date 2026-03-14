@@ -123,7 +123,14 @@ TEST_SIZE="${TEST_SIZE:-0.20}"
 SEED_START="${SEED_START:-0}"
 NUM_SEEDS="${NUM_SEEDS:-5}"
 REAL_DATASET_NAME="${REAL_DATASET_NAME:-titanic}"
-REAL_REGRESSION_DATASET_NAME="${REAL_REGRESSION_DATASET_NAME:-california_housing}"
+REAL_REPEAT_ID="${REAL_REPEAT_ID:-}"
+REAL_PROCESSED_ROOT="${REAL_PROCESSED_ROOT:-}"
+REAL_SPLIT_ROOT="${REAL_SPLIT_ROOT:-}"
+
+if [[ "$TASK_TYPE" == "regression" && "$DATASET" != "simulated" ]]; then
+  echo "[ERROR] scripts/run_group_risk_trajectory_benchmark.py only supports TASK_TYPE=regression with DATASET=simulated in experiment 2. Got TASK_TYPE=$TASK_TYPE DATASET=$DATASET" >&2
+  exit 1
+fi
 LEARNING_RATE="${LEARNING_RATE:-0.05}"
 MIN_SAMPLES_LEAF="${MIN_SAMPLES_LEAF:-5}"
 SUBSAMPLE="${SUBSAMPLE:-1.0}"
@@ -138,36 +145,53 @@ CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
 CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy loss_aware}"
 CTB_CURVATURE_EPS="${CTB_CURVATURE_EPS:-1e-6}"
 
-run_repo_script scripts/run_group_risk_trajectory_benchmark.py \
-  --task-type "$TASK_TYPE" \
-  --dataset "$DATASET" \
-  --group-definition "$GROUP_DEFINITION" \
-  --n-samples "$N_SAMPLES" \
-  --n-features "$N_FEATURES" \
-  --valid-size "$VALID_SIZE" \
-  --test-size "$TEST_SIZE" \
-  --seed-start "$SEED_START" \
-  --num-seeds "$NUM_SEEDS" \
-  --families bagging rf gbdt xgb ctb \
-  --max-depths 1 3 5 \
-  --ensemble-sizes 20 50 100 300 \
-  --trajectory-every "$TRAJECTORY_EVERY" \
-  --learning-rate "$LEARNING_RATE" \
-  --min-samples-leaf "$MIN_SAMPLES_LEAF" \
-  --subsample "$SUBSAMPLE" \
-  --colsample-bytree "$COLSAMPLE_BYTREE" \
-  --ctb-inner-bootstraps "$CTB_INNER_BOOTSTRAPS" \
-  --ctb-eta "$CTB_ETA" \
-  --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY" \
-  --ctb-weight-power "$CTB_WEIGHT_POWER" \
-  --ctb-weight-eps "$CTB_WEIGHT_EPS" \
-  --ctb-target-modes $CTB_TARGET_MODES \
-  --ctb-curvature-eps $CTB_CURVATURE_EPS \
-  --prediction-splits valid test \
-  --trajectory-splits valid test \
-  --trajectory-sample-count-per-group "$TRAJ_SAMPLES_PER_GROUP" \
-  --n-jobs "$N_JOBS" \
+run_args=(
+  --task-type "$TASK_TYPE"
+  --dataset "$DATASET"
+  --group-definition "$GROUP_DEFINITION"
+  --n-samples "$N_SAMPLES"
+  --n-features "$N_FEATURES"
+  --valid-size "$VALID_SIZE"
+  --test-size "$TEST_SIZE"
+  --seed-start "$SEED_START"
+  --num-seeds "$NUM_SEEDS"
+  --families bagging rf gbdt xgb ctb
+  --max-depths 1 3 5
+  --ensemble-sizes 20 50 100 300
+  --trajectory-every "$TRAJECTORY_EVERY"
+  --learning-rate "$LEARNING_RATE"
+  --min-samples-leaf "$MIN_SAMPLES_LEAF"
+  --subsample "$SUBSAMPLE"
+  --colsample-bytree "$COLSAMPLE_BYTREE"
+  --ctb-inner-bootstraps "$CTB_INNER_BOOTSTRAPS"
+  --ctb-eta "$CTB_ETA"
+  --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY"
+  --ctb-weight-power "$CTB_WEIGHT_POWER"
+  --ctb-weight-eps "$CTB_WEIGHT_EPS"
+  --ctb-target-modes $CTB_TARGET_MODES
+  --ctb-curvature-eps $CTB_CURVATURE_EPS
+  --prediction-splits valid test
+  --trajectory-splits valid test
+  --trajectory-sample-count-per-group "$TRAJ_SAMPLES_PER_GROUP"
+  --n-jobs "$N_JOBS"
   --outdir "$OUTDIR"
+)
+
+if [[ "$DATASET" == "real" ]]; then
+  run_args+=(--real-dataset-name "$REAL_DATASET_NAME")
+  if [[ -n "$REAL_REPEAT_ID" ]]; then
+    run_args+=(--repeat-id "$REAL_REPEAT_ID")
+  fi
+  if [[ -n "$REAL_PROCESSED_ROOT" ]]; then
+    run_args+=(--processed-root "$REAL_PROCESSED_ROOT")
+  fi
+  if [[ -n "$REAL_SPLIT_ROOT" ]]; then
+    run_args+=(--split-root "$REAL_SPLIT_ROOT")
+  fi
+fi
+
+run_repo_script scripts/run_group_risk_trajectory_benchmark.py "${run_args[@]}"
+
 
 echo "[e2] Benchmark complete. Starting analysis..."
 run_repo_script scripts/analyze_group_risk_redistribution.py \

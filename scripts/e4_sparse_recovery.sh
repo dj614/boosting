@@ -127,6 +127,7 @@ BETA_SCALE="${BETA_SCALE:-1.0}"
 BETA_PATTERN="${BETA_PATTERN:-equal}"
 SUPPORT_STRATEGY="${SUPPORT_STRATEGY:-spaced}"
 SNR="${SNR:-4.0}"
+CLASSIFICATION_LOGIT_SCALE="${CLASSIFICATION_LOGIT_SCALE:-1.0}"
 XGB_SUPPORT_K="${XGB_SUPPORT_K:-10}"
 TOP_FEATURES="${TOP_FEATURES:-25}"
 CTB_MAX_STEPS="${CTB_MAX_STEPS:-300}"
@@ -147,6 +148,7 @@ CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy loss_aware}"
 CTB_CURVATURE_EPS="${CTB_CURVATURE_EPS:-1e-6}"
 
 run_repo_script scripts/run_sparse_recovery_benchmark.py \
+  --task-types $TASK_TYPES \
   --designs independent block_correlated strong_collinear \
   --models l2boost bagged_componentwise ctb_sparse ctb_tree lasso xgb_tree \
   --num-seeds "$NUM_SEEDS" \
@@ -162,6 +164,7 @@ run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --beta-pattern "$BETA_PATTERN" \
   --support-strategy "$SUPPORT_STRATEGY" \
   --snr "$SNR" \
+  --classification-logit-scale "$CLASSIFICATION_LOGIT_SCALE" \
   --xgb-support-k "$XGB_SUPPORT_K" \
   --ctb-max-steps "$CTB_MAX_STEPS" \
   --ctb-inner-bootstraps "$CTB_INNER_BOOTSTRAPS" \

@@ -180,9 +180,9 @@ def main() -> None:
     summary_df = aggregate_metric_table(
         trial_df,
         group_cols=["task_type", "design", "family_name", "model_name", "support_eval_mode", "support_semantic_role", "family_semantic_bucket", "ctb_semantic_role"],
-        sort_by="test_mse_mean" if "test_mse" in trial_df.columns else "test_log_loss_mean",
+        sort_by=None,
         ascending=True,
-    )
+    ).sort_values(["task_type", "design", "family_name", "model_name"]).reset_index(drop=True)
     stability_df = _attach_semantic_columns(_stability_frame(trial_df))
     merged_df = _attach_semantic_columns(summary_df.merge(stability_df, on=["task_type", "design", "family_name", "support_semantic_role", "family_semantic_bucket", "ctb_semantic_role"], how="left"))
     _save_table(summary_df, outdir / "model_summary.csv")

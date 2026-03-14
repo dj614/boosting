@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
 
 
 Array = np.ndarray
@@ -28,6 +29,26 @@ def regression_metrics(y_true: Array, y_pred: Array) -> Dict[str, float]:
         "r2": r2,
     }
 
+
+
+
+def binary_classification_metrics(y_true: Array, y_prob: Array) -> Dict[str, float]:
+    y_true = np.asarray(y_true, dtype=int).reshape(-1)
+    y_prob = np.clip(np.asarray(y_prob, dtype=float).reshape(-1), 1e-8, 1.0 - 1e-8)
+    if y_true.shape != y_prob.shape:
+        raise ValueError("y_true and y_prob must have the same shape")
+    y_pred = (y_prob >= 0.5).astype(int)
+    out = {
+        "log_loss": float(log_loss(y_true, y_prob, labels=[0, 1])),
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "positive_rate": float(y_true.mean()),
+        "predicted_positive_rate": float(y_pred.mean()),
+    }
+    if np.unique(y_true).size >= 2:
+        out["roc_auc"] = float(roc_auc_score(y_true, y_prob))
+    else:
+        out["roc_auc"] = float("nan")
+    return out
 
 def support_indicator(support: Sequence[int], p: int) -> Array:
     if p <= 0:

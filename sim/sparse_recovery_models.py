@@ -6,19 +6,40 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import lasso_path
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import accuracy_score, log_loss, mean_squared_error
 
 from .ctb_core import ConsensusTransportBoosting
 from .ctb_semantics import ctb_tree_model_name
 from .sparse_recovery_data import SparseRegressionSplit
 
 try:  # pragma: no cover
-    from xgboost import XGBRegressor
+    from xgboost import XGBClassifier, XGBRegressor
 except Exception:  # pragma: no cover
+    XGBClassifier = None
     XGBRegressor = None
 
 
 Array = np.ndarray
+
+
+def _sigmoid_probability(score: Array) -> Array:
+    score = np.asarray(score, dtype=float).reshape(-1)
+    out = np.empty_like(score, dtype=float)
+    pos = score >= 0.0
+    out[pos] = 1.0 / (1.0 + np.exp(-score[pos]))
+    exp_score = np.exp(score[~pos])
+    out[~pos] = exp_score / (1.0 + exp_score)
+    return np.clip(out, 1e-8, 1.0 - 1e-8)
+
+
+def _binary_log_loss(y_true: Array, y_prob: Array) -> float:
+    return float(log_loss(np.asarray(y_true, dtype=int), np.clip(np.asarray(y_prob, dtype=float), 1e-8, 1.0 - 1e-8), labels=[0, 1]))
+
+
+def _binary_accuracy(y_true: Array, y_prob: Array) -> float:
+    y_true_arr = np.asarray(y_true, dtype=int)
+    y_prob_arr = np.asarray(y_prob, dtype=float)
+    return float(accuracy_score(y_true_arr, (y_prob_arr >= 0.5).astype(int)))
 
 
 @dataclass(frozen=True)
@@ -176,6 +197,14 @@ class SparseRegressionWrapperBase:
 
     def predict(self, X: Array):
         raise NotImplementedError
+
+
+class SparseClassificationWrapperBase(SparseRegressionWrapperBase):
+    def predict_proba(self, X: Array, **kwargs) -> Array:
+        raise NotImplementedError
+
+    def predict(self, X: Array, threshold: float = 0.5, **kwargs) -> Array:
+        return (self.predict_proba(X, **kwargs) >= float(threshold)).astype(int)
 
 
 class L2BoostingRegressorWrapper(SparseRegressionWrapperBase):
@@ -1071,47 +1100,398 @@ class CTBTreeRegressorWrapper(SparseRegressionWrapperBase):
         return np.sort(order[:k].astype(int))
 
 
+def _reselect_binary_l2boost(model: "L2BoostingClassifierWrapper", valid_split: SparseRegressionSplit) -> None:
+    if model.coef_path_ is None or model.selected_feature_path_ is None:
+        raise RuntimeError("Model has not been fit")
+    staged_scores = model.predict_score_staged(valid_split.X, checkpoints=model.selection_checkpoints)
+    rows: List[Dict[str, float]] = []
+    best_step = None
+    best_log_loss = None
+    for step in model.selection_checkpoints:
+        prob = _sigmoid_probability(staged_scores[int(step)])
+        logloss = _binary_log_loss(valid_split.y, prob)
+        acc = _binary_accuracy(valid_split.y, prob)
+        coef = model.coef_path_[step - 1]
+        support_size = int(np.count_nonzero(np.abs(coef) > model.config.coef_tol))
+        rows.append({
+            "checkpoint": int(step),
+            "valid_log_loss": logloss,
+            "valid_accuracy": acc,
+            "support_size": float(support_size),
+            "last_selected_feature": float(model.selected_feature_path_[step - 1]),
+        })
+        if best_log_loss is None or logloss < best_log_loss:
+            best_log_loss = logloss
+            best_step = int(step)
+    model.selection_trace_ = pd.DataFrame(rows)
+    model.selected_step_ = int(best_step)
+    model.selected_coef_ = model.coef_path_[model.selected_step_ - 1].copy()
+    model.selected_support_ = np.flatnonzero(np.abs(model.selected_coef_) > model.config.coef_tol).astype(int)
+
+
+def _reselect_binary_bagged(model: "BaggedComponentwiseClassifierWrapper", valid_split: SparseRegressionSplit) -> None:
+    if model.bag_coef_matrix_ is None:
+        raise RuntimeError("Model has not been fit")
+    staged_scores = model.predict_score_staged(valid_split.X, checkpoints=model.selection_checkpoints)
+    rows: List[Dict[str, float]] = []
+    best_checkpoint = None
+    best_log_loss = None
+    mean_support_size_by_checkpoint: Dict[int, float] = {}
+    for checkpoint in model.selection_checkpoints:
+        prob = _sigmoid_probability(staged_scores[int(checkpoint)])
+        logloss = _binary_log_loss(valid_split.y, prob)
+        acc = _binary_accuracy(valid_split.y, prob)
+        selection_freq = np.mean(np.abs(model.bag_coef_matrix_[:checkpoint]) > model.config.coef_tol, axis=0)
+        threshold_support = int(np.count_nonzero(selection_freq >= model.config.support_frequency_threshold))
+        mean_support = float(np.mean(np.count_nonzero(np.abs(model.bag_coef_matrix_[:checkpoint]) > model.config.coef_tol, axis=1)))
+        mean_support_size_by_checkpoint[int(checkpoint)] = mean_support
+        rows.append({
+            "checkpoint": int(checkpoint),
+            "valid_log_loss": logloss,
+            "valid_accuracy": acc,
+            "support_size_frequency_threshold": float(threshold_support),
+            "mean_single_model_support_size": mean_support,
+            "union_support_size": float(np.count_nonzero(np.any(np.abs(model.bag_coef_matrix_[:checkpoint]) > model.config.coef_tol, axis=0))),
+        })
+        if best_log_loss is None or logloss < best_log_loss:
+            best_log_loss = logloss
+            best_checkpoint = int(checkpoint)
+    model.selection_trace_ = pd.DataFrame(rows)
+    model.selected_checkpoint_ = int(best_checkpoint)
+    model.selected_coef_ = model.bag_coef_matrix_[: model.selected_checkpoint_].mean(axis=0)
+    model.selection_frequency_ = np.mean(np.abs(model.bag_coef_matrix_[: model.selected_checkpoint_]) > model.config.coef_tol, axis=0)
+    model.average_abs_coef_ = np.mean(np.abs(model.bag_coef_matrix_[: model.selected_checkpoint_]), axis=0)
+    model.selected_support_ = np.flatnonzero(model.selection_frequency_ >= model.config.support_frequency_threshold).astype(int)
+    model.mean_support_size_by_checkpoint_ = mean_support_size_by_checkpoint
+
+
+def _reselect_binary_ctb_sparse(model: "CTBSparseClassifierWrapper", valid_split: SparseRegressionSplit) -> None:
+    if model.coef_path_ is None or model.support_score_path_ is None or model.selection_frequency_path_ is None:
+        raise RuntimeError("Model has not been fit")
+    staged_scores = model.predict_score_staged(valid_split.X, checkpoints=model.selection_checkpoints)
+    rows: List[Dict[str, float]] = []
+    best_step = None
+    best_log_loss = None
+    for step in model.selection_checkpoints:
+        prob = _sigmoid_probability(staged_scores[int(step)])
+        logloss = _binary_log_loss(valid_split.y, prob)
+        acc = _binary_accuracy(valid_split.y, prob)
+        selection_freq_step = model.selection_frequency_path_[step - 1]
+        support_size = int(np.count_nonzero(selection_freq_step >= model.config.support_frequency_threshold))
+        rows.append({
+            "checkpoint": int(step),
+            "valid_log_loss": logloss,
+            "valid_accuracy": acc,
+            "support_size": float(support_size),
+            "mean_selection_frequency": float(np.mean(selection_freq_step)),
+            "mean_support_score": float(np.mean(model.support_score_path_[step - 1])),
+        })
+        if best_log_loss is None or logloss < best_log_loss:
+            best_log_loss = logloss
+            best_step = int(step)
+    model.selection_trace_ = pd.DataFrame(rows)
+    model.selected_step_ = int(best_step)
+    model.selected_coef_ = model.coef_path_[model.selected_step_ - 1].copy()
+    model.support_score_ = model.support_score_path_[model.selected_step_ - 1].copy()
+    model.selection_frequency_ = model.selection_frequency_path_[model.selected_step_ - 1].copy()
+    model.selected_support_from_frequency_ = np.flatnonzero(model.selection_frequency_ >= model.config.support_frequency_threshold).astype(int)
+    model.selected_support_ = np.flatnonzero(model.support_score_ >= model.config.support_frequency_threshold).astype(int)
+
+
+def _reselect_binary_lasso(model: "LassoPathClassifierWrapper", valid_split: SparseRegressionSplit) -> None:
+    if model.coef_path_ is None or model.alpha_path_ is None:
+        raise RuntimeError("Model has not been fit")
+    rows: List[Dict[str, float]] = []
+    best_idx = None
+    best_log_loss = None
+    for idx, alpha in enumerate(model.alpha_path_):
+        score = model.predict_score(valid_split.X, alpha=float(alpha))
+        prob = _sigmoid_probability(score)
+        logloss = _binary_log_loss(valid_split.y, prob)
+        acc = _binary_accuracy(valid_split.y, prob)
+        support_size = int(np.count_nonzero(np.abs(model.coef_path_[idx]) > model.config.coef_tol))
+        rows.append({
+            "alpha": float(alpha),
+            "valid_log_loss": logloss,
+            "valid_accuracy": acc,
+            "support_size": float(support_size),
+        })
+        if best_log_loss is None or logloss < best_log_loss:
+            best_log_loss = logloss
+            best_idx = idx
+    model.selection_trace_ = pd.DataFrame(rows)
+    model.selected_alpha_ = float(model.alpha_path_[best_idx])
+    model.selected_coef_ = model.coef_path_[best_idx].copy()
+    model.selected_support_ = np.flatnonzero(np.abs(model.selected_coef_) > model.config.coef_tol).astype(int)
+
+
+class L2BoostingClassifierWrapper(L2BoostingRegressorWrapper, SparseClassificationWrapperBase):
+    def fit(self, train_split: SparseRegressionSplit, valid_split: SparseRegressionSplit) -> "L2BoostingClassifierWrapper":
+        super().fit(train_split, valid_split)
+        _reselect_binary_l2boost(self, valid_split)
+        return self
+
+    def predict_score(self, X: Array, step: Optional[int] = None) -> Array:
+        return L2BoostingRegressorWrapper.predict(self, X, step=step)
+
+    def predict_score_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        return L2BoostingRegressorWrapper.predict_staged(self, X, checkpoints=checkpoints)
+
+    def predict_proba(self, X: Array, step: Optional[int] = None) -> Array:
+        return _sigmoid_probability(self.predict_score(X, step=step))
+
+
+class BaggedComponentwiseClassifierWrapper(BaggedComponentwiseRegressorWrapper, SparseClassificationWrapperBase):
+    def fit(self, train_split: SparseRegressionSplit, valid_split: SparseRegressionSplit) -> "BaggedComponentwiseClassifierWrapper":
+        super().fit(train_split, valid_split)
+        _reselect_binary_bagged(self, valid_split)
+        return self
+
+    def predict_score(self, X: Array, checkpoint: Optional[int] = None) -> Array:
+        return BaggedComponentwiseRegressorWrapper.predict(self, X, checkpoint=checkpoint)
+
+    def predict_score_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        return BaggedComponentwiseRegressorWrapper.predict_staged(self, X, checkpoints=checkpoints)
+
+    def predict_proba(self, X: Array, checkpoint: Optional[int] = None) -> Array:
+        return _sigmoid_probability(self.predict_score(X, checkpoint=checkpoint))
+
+
+class CTBSparseClassifierWrapper(CTBSparseRegressorWrapper, SparseClassificationWrapperBase):
+    def fit(self, train_split: SparseRegressionSplit, valid_split: SparseRegressionSplit) -> "CTBSparseClassifierWrapper":
+        super().fit(train_split, valid_split)
+        _reselect_binary_ctb_sparse(self, valid_split)
+        return self
+
+    def predict_score(self, X: Array, step: Optional[int] = None) -> Array:
+        return CTBSparseRegressorWrapper.predict(self, X, step=step)
+
+    def predict_score_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        return CTBSparseRegressorWrapper.predict_staged(self, X, checkpoints=checkpoints)
+
+    def predict_proba(self, X: Array, step: Optional[int] = None) -> Array:
+        return _sigmoid_probability(self.predict_score(X, step=step))
+
+
+class LassoPathClassifierWrapper(LassoPathRegressorWrapper, SparseClassificationWrapperBase):
+    def fit(self, train_split: SparseRegressionSplit, valid_split: SparseRegressionSplit) -> "LassoPathClassifierWrapper":
+        super().fit(train_split, valid_split)
+        _reselect_binary_lasso(self, valid_split)
+        return self
+
+    def predict_score(self, X: Array, alpha: Optional[float] = None) -> Array:
+        return LassoPathRegressorWrapper.predict(self, X, alpha=alpha)
+
+    def predict_proba(self, X: Array, alpha: Optional[float] = None) -> Array:
+        return _sigmoid_probability(self.predict_score(X, alpha=alpha))
+
+
+class XGBTreeClassifierWrapper(SparseClassificationWrapperBase):
+    def __init__(self, config: XGBTreeConfig, selection_checkpoints: Optional[Sequence[int]] = None) -> None:
+        super().__init__()
+        self.config = config
+        self.selection_checkpoints = _resolve_checkpoints(selection_checkpoints, max_checkpoint=config.n_estimators, default_points=min(25, config.n_estimators))
+        self.model = None
+        self.selected_checkpoint_: Optional[int] = None
+        self.feature_importances_: Optional[Array] = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def fit(self, train_split: SparseRegressionSplit, valid_split: SparseRegressionSplit) -> "XGBTreeClassifierWrapper":
+        if XGBClassifier is None:  # pragma: no cover
+            raise ImportError("xgboost is not installed, but XGBTreeClassifierWrapper was requested")
+        self.model = XGBClassifier(
+            n_estimators=self.config.n_estimators,
+            max_depth=self.config.max_depth,
+            learning_rate=self.config.learning_rate,
+            subsample=self.config.subsample,
+            colsample_bytree=self.config.colsample_bytree,
+            reg_lambda=self.config.reg_lambda,
+            objective="binary:logistic",
+            eval_metric="logloss",
+            tree_method="hist",
+            random_state=self.config.random_state,
+            n_jobs=1,
+            verbosity=0,
+        )
+        self.model.fit(train_split.X, np.asarray(train_split.y, dtype=int))
+        rows: List[Dict[str, float]] = []
+        best_checkpoint = None
+        best_valid_log_loss = None
+        for checkpoint in self.selection_checkpoints:
+            prob = np.asarray(self.model.predict_proba(valid_split.X, iteration_range=(0, int(checkpoint)))[:, 1], dtype=float)
+            logloss = _binary_log_loss(valid_split.y, prob)
+            acc = _binary_accuracy(valid_split.y, prob)
+            rows.append({"checkpoint": int(checkpoint), "valid_log_loss": logloss, "valid_accuracy": acc})
+            if best_valid_log_loss is None or logloss < best_valid_log_loss:
+                best_valid_log_loss = logloss
+                best_checkpoint = int(checkpoint)
+        self.selection_trace_ = pd.DataFrame(rows)
+        self.selected_checkpoint_ = int(best_checkpoint)
+        self.feature_importances_ = np.asarray(self.model.feature_importances_, dtype=float)
+        self.selected_support_ = np.flatnonzero(self.feature_importances_ > 0).astype(int)
+        return self
+
+    def predict_proba(self, X: Array, checkpoint: Optional[int] = None) -> Array:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        use_checkpoint = int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)
+        return np.asarray(self.model.predict_proba(X, iteration_range=(0, use_checkpoint))[:, 1], dtype=float)
+
+    def predict_proba_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        out: Dict[int, Array] = {}
+        for checkpoint in sorted({int(c) for c in checkpoints}):
+            _validate_step(checkpoint, self.config.n_estimators)
+            out[int(checkpoint)] = np.asarray(self.model.predict_proba(X, iteration_range=(0, checkpoint))[:, 1], dtype=float)
+        return out
+
+    def topk_support(self, k: int) -> Array:
+        if self.feature_importances_ is None:
+            raise RuntimeError("Model has not been fit")
+        if k <= 0:
+            raise ValueError("k must be positive")
+        k = min(int(k), self.feature_importances_.shape[0])
+        order = np.argsort(-self.feature_importances_)
+        return np.sort(order[:k].astype(int))
+
+
+class CTBTreeClassifierWrapper(SparseClassificationWrapperBase):
+    def __init__(self, config: CTBTreeConfig, selection_checkpoints: Optional[Sequence[int]] = None) -> None:
+        super().__init__()
+        self.config = config
+        self.selection_checkpoints = _resolve_checkpoints(selection_checkpoints, max_checkpoint=config.n_estimators, default_points=min(25, config.n_estimators))
+        self.model = None
+        self.selected_checkpoint_: Optional[int] = None
+        self.feature_importances_: Optional[Array] = None
+        self.feature_importances_by_checkpoint_: Optional[Dict[int, Array]] = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def fit(self, train_split: SparseRegressionSplit, valid_split: SparseRegressionSplit) -> "CTBTreeClassifierWrapper":
+        self.model = ConsensusTransportBoosting(
+            task_type="classification",
+            n_estimators=self.config.n_estimators,
+            n_inner_bootstraps=self.config.n_inner_bootstraps,
+            eta=self.config.eta,
+            instability_penalty=self.config.instability_penalty,
+            weight_power=self.config.weight_power,
+            weight_eps=self.config.weight_eps,
+            update_target_mode=self.config.update_target_mode,
+            transport_curvature_eps=self.config.transport_curvature_eps,
+            max_depth=self.config.max_depth,
+            min_samples_leaf=self.config.min_samples_leaf,
+            random_state=self.config.random_state,
+        )
+        self.model.fit(train_split.X, np.asarray(train_split.y, dtype=int))
+        staged_valid = self.model.predict_proba_staged(valid_split.X, checkpoints=self.selection_checkpoints)
+        rows: List[Dict[str, float]] = []
+        best_checkpoint = None
+        best_valid_log_loss = None
+        for checkpoint in self.selection_checkpoints:
+            prob = np.asarray(staged_valid[int(checkpoint)][:, 1], dtype=float)
+            logloss = _binary_log_loss(valid_split.y, prob)
+            acc = _binary_accuracy(valid_split.y, prob)
+            rows.append({"checkpoint": int(checkpoint), "valid_log_loss": logloss, "valid_accuracy": acc})
+            if best_valid_log_loss is None or logloss < best_valid_log_loss:
+                best_valid_log_loss = logloss
+                best_checkpoint = int(checkpoint)
+        self.selection_trace_ = pd.DataFrame(rows)
+        self.selected_checkpoint_ = int(best_checkpoint)
+
+        p = train_split.X.shape[1]
+        requested = set(self.selection_checkpoints)
+        importances_by_checkpoint: Dict[int, Array] = {}
+        cumulative = np.zeros(p, dtype=float)
+        learner_count = 0
+        for round_idx, round_learners in enumerate(self.model.learners_, start=1):
+            for learner in round_learners:
+                cumulative += np.asarray(learner.feature_importances_, dtype=float)
+                learner_count += 1
+            if round_idx in requested:
+                importances_by_checkpoint[int(round_idx)] = cumulative / float(learner_count) if learner_count > 0 else np.zeros(p, dtype=float)
+        self.feature_importances_by_checkpoint_ = importances_by_checkpoint
+        self.feature_importances_ = np.asarray(importances_by_checkpoint[self.selected_checkpoint_], dtype=float)
+        self.selected_support_ = np.flatnonzero(self.feature_importances_ > 0).astype(int)
+        return self
+
+    def predict_proba(self, X: Array, checkpoint: Optional[int] = None) -> Array:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        use_checkpoint = int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)
+        staged = self.model.predict_proba_staged(X, checkpoints=[use_checkpoint])
+        return np.asarray(staged[use_checkpoint][:, 1], dtype=float)
+
+    def predict_proba_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        staged = self.model.predict_proba_staged(X, checkpoints=checkpoints)
+        return {int(k): np.asarray(v[:, 1], dtype=float) for k, v in staged.items()}
+
+    def topk_support(self, k: int) -> Array:
+        if self.feature_importances_ is None:
+            raise RuntimeError("Model has not been fit")
+        if k <= 0:
+            raise ValueError("k must be positive")
+        k = min(int(k), self.feature_importances_.shape[0])
+        order = np.argsort(-self.feature_importances_)
+        return np.sort(order[:k].astype(int))
+
+
 def build_experiment4_model(
     model_name: str,
     *,
+    task_type: str = "regression",
     random_state: int = 0,
     selection_checkpoints: Optional[Sequence[int]] = None,
     trajectory_checkpoints: Optional[Sequence[int]] = None,
     **kwargs,
 ):
     name = str(model_name)
+    task = str(task_type)
+    if task not in {"regression", "classification"}:
+        raise ValueError(f"Unsupported task_type={task_type!r}")
     if name == "l2boost":
         config = L2BoostingConfig(random_state=random_state, **kwargs)
-        return L2BoostingRegressorWrapper(
+        wrapper_cls = L2BoostingRegressorWrapper if task == "regression" else L2BoostingClassifierWrapper
+        return wrapper_cls(
             config=config,
             selection_checkpoints=selection_checkpoints,
             trajectory_checkpoints=trajectory_checkpoints,
         )
     if name == "bagged_componentwise":
         config = BaggedComponentwiseConfig(random_state=random_state, **kwargs)
-        return BaggedComponentwiseRegressorWrapper(
+        wrapper_cls = BaggedComponentwiseRegressorWrapper if task == "regression" else BaggedComponentwiseClassifierWrapper
+        return wrapper_cls(
             config=config,
             selection_checkpoints=selection_checkpoints,
         )
     if name == "ctb_sparse":
         config = CTBSparseConfig(random_state=random_state, **kwargs)
-        return CTBSparseRegressorWrapper(
+        wrapper_cls = CTBSparseRegressorWrapper if task == "regression" else CTBSparseClassifierWrapper
+        return wrapper_cls(
             config=config,
             selection_checkpoints=selection_checkpoints,
             trajectory_checkpoints=trajectory_checkpoints,
         )
     if name == "ctb_tree":
         config = CTBTreeConfig(random_state=random_state, **kwargs)
-        return CTBTreeRegressorWrapper(
+        wrapper_cls = CTBTreeRegressorWrapper if task == "regression" else CTBTreeClassifierWrapper
+        return wrapper_cls(
             config=config,
             selection_checkpoints=selection_checkpoints,
         )
     if name == "lasso":
         config = LassoPathConfig(random_state=random_state, **kwargs)
-        return LassoPathRegressorWrapper(config=config)
+        return LassoPathRegressorWrapper(config=config) if task == "regression" else LassoPathClassifierWrapper(config=config)
     if name == "xgb_tree":
         config = XGBTreeConfig(random_state=random_state, **kwargs)
-        return XGBTreeRegressorWrapper(config=config, selection_checkpoints=selection_checkpoints)
+        return XGBTreeRegressorWrapper(config=config, selection_checkpoints=selection_checkpoints) if task == "regression" else XGBTreeClassifierWrapper(config=config, selection_checkpoints=selection_checkpoints)
     raise ValueError(f"Unsupported model_name={model_name!r}")
 
 

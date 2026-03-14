@@ -25,6 +25,7 @@ from sim.instability_matching_eval import (
     groupwise_prediction_variance,
     subgroup_metrics,
 )
+from sim.ctb_semantics import canonical_ctb_tree_result_method, normalize_ctb_tree_method_name
 from sim.instability_matching_models import build_model, default_methods_for_task, make_default_learner_specs
 
 
@@ -63,14 +64,19 @@ def _resolve_methods(task_type: str, requested_methods: List[str] | None, spec_k
     if requested_methods is None:
         return default_methods_for_task(task_type)
     available = make_default_learner_specs(random_state=0, **spec_kwargs)
-    task_methods = [name for name in requested_methods if name in available and available[name].task_type == task_type]
+    task_methods: List[str] = []
+    seen = set()
+    for name in requested_methods:
+        if name not in available or available[name].task_type != task_type:
+            continue
+        canonical_name = normalize_ctb_tree_method_name(name)
+        if canonical_name in seen:
+            continue
+        seen.add(canonical_name)
+        task_methods.append(str(name))
     if not task_methods:
         raise ValueError(f"No requested methods are compatible with task_type={task_type!r}")
     return task_methods
-
-
-def _format_float_for_name(value: float) -> str:
-    return f"{float(value):g}".replace("-", "m").replace(".", "p")
 
 
 def _expand_method_specs(
@@ -82,23 +88,18 @@ def _expand_method_specs(
 ) -> List[Dict[str, object]]:
     expanded: List[Dict[str, object]] = []
     for method in methods:
-        if not str(method).startswith("ctb_"):
+        canonical_method = normalize_ctb_tree_method_name(method)
+        if not canonical_method.startswith("ctb_"):
             expanded.append(
                 {
                     "method": str(method),
-                    "result_method": str(method),
+                    "result_method": canonical_method,
                     "spec_kwargs": dict(base_spec_kwargs),
                 }
             )
             continue
         for target_mode in ctb_target_modes:
             for curvature_eps in ctb_curvature_eps:
-                result_method = str(method)
-                if len(ctb_target_modes) > 1 or len(ctb_curvature_eps) > 1 or str(target_mode) != "legacy" or abs(float(curvature_eps) - 1e-6) > 0.0:
-                    result_method = (
-                        f"{method}__mode-{str(target_mode)}"
-                        f"__ceps-{_format_float_for_name(float(curvature_eps))}"
-                    )
                 spec_kwargs = dict(base_spec_kwargs)
                 spec_kwargs.update(
                     {
@@ -109,7 +110,11 @@ def _expand_method_specs(
                 expanded.append(
                     {
                         "method": str(method),
-                        "result_method": result_method,
+                        "result_method": canonical_ctb_tree_result_method(
+                            canonical_method,
+                            update_target_mode=str(target_mode),
+                            transport_curvature_eps=float(curvature_eps),
+                        ),
                         "spec_kwargs": spec_kwargs,
                     }
                 )

@@ -28,6 +28,7 @@ from parallel_utils import make_process_pool, resolve_n_jobs
 from progress_utils import progress_bar
 from sim.sparse_recovery_data import generate_sparse_regression_dataset, summarize_sparse_regression_dataset
 from sim.sparse_recovery_eval import make_feature_support_frame, regression_metrics, support_recovery_metrics
+from sim.ctb_semantics import ctb_tree_model_name
 from sim.sparse_recovery_models import build_experiment4_model
 
 
@@ -336,10 +337,12 @@ def main() -> None:
                     for depth in args.ctb_tree_max_depths:
                         for target_mode in args.ctb_target_modes:
                             for curvature_eps in args.ctb_curvature_eps:
-                                fmt_eps = f"{float(curvature_eps):g}".replace("-", "m").replace(".", "p")
-                                candidate_name = f"ctb_tree_depth{int(depth)}"
-                                if str(target_mode) != "legacy" or abs(float(curvature_eps) - 1e-6) > 0.0:
-                                    candidate_name = f"{candidate_name}__mode-{str(target_mode)}__ceps-{fmt_eps}"
+                                candidate_name = ctb_tree_model_name(
+                                    depth=int(depth),
+                                    update_target_mode=str(target_mode),
+                                    transport_curvature_eps=float(curvature_eps),
+                                    include_task_suffix=False,
+                                ).replace("ctb_depth", "ctb_tree_depth", 1)
                                 tasks.append(
                                     {
                                         "design": design,

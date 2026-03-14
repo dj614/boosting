@@ -47,7 +47,7 @@ from real_data.schema import (  # noqa: E402
     DEFAULT_REAL_PROCESSED_ROOT,
     DEFAULT_REAL_SPLIT_ROOT,
 )
-from sim.ctb_semantics import normalize_ctb_tree_family_name  # noqa: E402
+from sim.ctb_semantics import normalize_ctb_tree_family_name, normalize_ctb_tree_family_sequence  # noqa: E402
 from sim.group_risk_ensemble_models import (  # noqa: E402
     EnsembleModelConfig,
     build_ensemble_wrapper,
@@ -441,7 +441,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
         group_df = evaluation["group_metrics"].copy()
         group_df.insert(0, "selected_checkpoint", int(wrapper.selected_checkpoint_))
         group_df.insert(0, "model_name", model_config.model_name)
-        group_df.insert(0, "family_name", model_config.family)
+        group_df.insert(0, "family_name", normalize_ctb_tree_family_name(model_config.family))
         group_df.insert(0, "seed", int(seed))
         group_df.insert(0, "split", split_name)
         group_df.insert(0, "dataset_name", dataset.dataset_name)
@@ -553,7 +553,7 @@ def main() -> None:
     outdir: Path = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
 
-    families = args.families or list(DEFAULT_FAMILIES)
+    families = normalize_ctb_tree_family_sequence(args.families or list(DEFAULT_FAMILIES))
     selection_checkpoints = sorted({int(x) for x in args.ensemble_sizes if int(x) > 0})
     trajectory_checkpoints = _trajectory_checkpoints(selection_checkpoints, every=args.trajectory_every)
 

@@ -46,7 +46,7 @@ from real_regression.schema import (
 )
 from real_regression.preprocess import materialize_real_regression_dataset
 from sim.grouped_classification_eval import compute_binary_classification_metrics
-from sim.ctb_semantics import normalize_ctb_tree_family_name
+from sim.ctb_semantics import normalize_ctb_tree_family_name, normalize_ctb_tree_family_sequence
 from sim.tabular_benchmark_models import (
     TabularBenchmarkModelConfig,
     build_tabular_benchmark_wrapper,
@@ -348,6 +348,8 @@ def run_open_tabular_benchmark(
     use_report_metric_for_selection: bool = False,
 ) -> Dict[str, object]:
     output_root.mkdir(parents=True, exist_ok=True)
+
+    families = normalize_ctb_tree_family_sequence(families)
 
     selection_checkpoints = _resolved_selection_checkpoints(
         max_rounds=int(max_rounds),

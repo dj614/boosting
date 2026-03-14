@@ -85,7 +85,7 @@ outputs/
 data_cache/
 artifacts/
 checkpoints/
-# # 先忽略 data/ 下所有内容
-# data/**
-# # 再放行 data/ 最外层的 .py 文件
-# !data/*.py
+# 先忽略 data/ 下所有内容
+data/**
+# 再放行 data/ 最外层的 .py 文件
+!data/*.py

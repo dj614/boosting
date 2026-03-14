@@ -113,7 +113,6 @@ PY
 }
 
 OUTDIR="${OUTDIR:-outputs/experiment2_group_risk}"
-TASK_TYPES="${TASK_TYPES:-classification regression}"
 DATASET="${DATASET:-simulated}"          # simulated or adult or real
 GROUP_DEFINITION="${GROUP_DEFINITION:-sex_age}"
 N_SAMPLES="${N_SAMPLES:-12000}"
@@ -175,7 +174,6 @@ run_repo_script scripts/analyze_group_risk_redistribution.py \
   --input-dir "$OUTDIR" \
   --outdir "$OUTDIR/analysis" \
   --split test \
-  --bootstrap-iters 200 \
   --baseline-top-frac 0.10
   
 maybe_log_to_wandb "$OUTDIR" "experiment2" "experiment2-group-risk" "experiment2,group-risk"

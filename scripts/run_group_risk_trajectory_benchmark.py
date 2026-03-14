@@ -196,6 +196,7 @@ def _selection_metric_name(task_type: str) -> str:
 def _flatten_metrics(
     evaluation: Dict[str, object],
     *,
+    task_type: str,
     dataset_name: str,
     split: str,
     seed: int,
@@ -204,6 +205,7 @@ def _flatten_metrics(
     selected_checkpoint: int,
 ) -> Dict[str, object]:
     row: Dict[str, object] = {
+        "task_type": str(task_type),
         "dataset_name": dataset_name,
         "split": split,
         "seed": int(seed),
@@ -270,6 +272,7 @@ def _trajectory_core_rows(
     for checkpoint, prediction in sorted(staged_predictions.items()):
         evaluation = _evaluate_predictions(task_type, y_true=split.y, prediction=prediction, group=split.group)
         row = {
+            "task_type": str(task_type),
             "dataset_name": dataset_name,
             "split": split_name,
             "seed": int(seed),
@@ -309,6 +312,7 @@ def _trajectory_group_rows(
         group_df.insert(0, "seed", int(seed))
         group_df.insert(0, "split", split_name)
         group_df.insert(0, "dataset_name", dataset_name)
+        group_df.insert(0, "task_type", str(task_type))
         rows.extend(group_df.to_dict("records"))
     return rows
 
@@ -335,6 +339,7 @@ def _trajectory_sample_rows(
         if task_type == "classification":
             frame = pd.DataFrame(
                 {
+                    "task_type": str(task_type),
                     "dataset_name": dataset_name,
                     "split": split_name,
                     "seed": int(seed),
@@ -358,6 +363,7 @@ def _trajectory_sample_rows(
         else:
             frame = pd.DataFrame(
                 {
+                    "task_type": str(task_type),
                     "dataset_name": dataset_name,
                     "split": split_name,
                     "seed": int(seed),
@@ -429,6 +435,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
         evaluation = _evaluate_predictions(task_type, y_true=split.y, prediction=prediction, group=split.group)
         metrics_row = _flatten_metrics(
             evaluation,
+            task_type=task_type,
             dataset_name=dataset.dataset_name,
             split=split_name,
             seed=seed,
@@ -445,6 +452,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
         group_df.insert(0, "seed", int(seed))
         group_df.insert(0, "split", split_name)
         group_df.insert(0, "dataset_name", dataset.dataset_name)
+        group_df.insert(0, "task_type", str(task_type))
         group_summary_rows.extend(group_df.to_dict("records"))
 
         _write_json(
@@ -469,6 +477,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
                 y_prob=prediction,
                 metadata=split.metadata,
             )
+            prediction_frame.insert(0, "task_type", str(task_type))
             save_binary_prediction_frame(prediction_frame, model_dir / f"predictions_{split_name}.csv")
         else:
             prediction_frame = make_regression_prediction_frame(
@@ -483,6 +492,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
                 y_pred=prediction,
                 metadata=split.metadata,
             )
+            prediction_frame.insert(0, "task_type", str(task_type))
             save_regression_prediction_frame(prediction_frame, model_dir / f"predictions_{split_name}.csv")
 
     core_rows: List[Dict[str, object]] = []
@@ -690,26 +700,41 @@ def main() -> None:
     if summary_rows:
         summary_df = pd.DataFrame(summary_rows)
         summary_df.to_csv(outdir / "metrics_summary.csv", index=False)
-        seed_grouped = summary_df.groupby(["dataset_name", "split", "family_name", "model_name"], dropna=False)
+        seed_grouped = summary_df.groupby(["task_type", "dataset_name", "split", "family_name", "model_name"], dropna=False)
         mean_df = seed_grouped.mean(numeric_only=True).reset_index()
         se_df = seed_grouped.sem(numeric_only=True).reset_index()
-        merged = mean_df.merge(se_df, on=["dataset_name", "split", "family_name", "model_name"], suffixes=("_mean", "_se"))
+        merged = mean_df.merge(se_df, on=["task_type", "dataset_name", "split", "family_name", "model_name"], suffixes=("_mean", "_se"))
         merged.to_csv(outdir / "metrics_summary_aggregated.csv", index=False)
 
         selected_df = _selected_valid_metric(summary_df, str(args.task_type))
         if not selected_df.empty:
             selected_df.to_csv(outdir / "metrics_summary_family_selected.csv", index=False)
-            selected_grouped = selected_df.groupby(["dataset_name", "split", "family_name", "model_name"], dropna=False)
+            selected_grouped = selected_df.groupby(["task_type", "dataset_name", "split", "family_name", "model_name"], dropna=False)
             selected_mean = selected_grouped.mean(numeric_only=True).reset_index()
             selected_se = selected_grouped.sem(numeric_only=True).reset_index()
             selected_agg = selected_mean.merge(
                 selected_se,
-                on=["dataset_name", "split", "family_name", "model_name"],
+                on=["task_type", "dataset_name", "split", "family_name", "model_name"],
                 suffixes=("_mean", "_se"),
             )
             selected_agg.to_csv(outdir / "metrics_summary_family_selected_aggregated.csv", index=False)
     if group_summary_rows:
-        pd.DataFrame(group_summary_rows).to_csv(outdir / "group_metrics_summary.csv", index=False)
+        group_summary_df = pd.DataFrame(group_summary_rows)
+        group_summary_df.to_csv(outdir / "group_metrics_summary.csv", index=False)
+        if summary_rows:
+            selected_keys = None
+            try:
+                selected_keys = selected_df[["task_type", "dataset_name", "seed", "family_name", "model_name"]].drop_duplicates()
+            except Exception:
+                selected_keys = None
+            if selected_keys is not None and not selected_keys.empty:
+                group_selected_df = group_summary_df.merge(
+                    selected_keys,
+                    on=["task_type", "dataset_name", "seed", "family_name", "model_name"],
+                    how="inner",
+                )
+                if not group_selected_df.empty:
+                    group_selected_df.to_csv(outdir / "group_metrics_summary_family_selected.csv", index=False)
 
     print(f"Wrote step-2 outputs to: {outdir}")
 

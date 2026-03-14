@@ -113,7 +113,8 @@ PY
 }
 
 OUTDIR="${OUTDIR:-outputs/experiment2_group_risk}"
-DATASET="${DATASET:-simulated}"          # simulated or adult
+TASK_TYPES="${TASK_TYPES:-classification regression}"
+DATASET="${DATASET:-simulated}"          # simulated or adult or real
 GROUP_DEFINITION="${GROUP_DEFINITION:-sex_age}"
 N_SAMPLES="${N_SAMPLES:-12000}"
 N_FEATURES="${N_FEATURES:-8}"
@@ -122,6 +123,8 @@ VALID_SIZE="${VALID_SIZE:-0.20}"
 TEST_SIZE="${TEST_SIZE:-0.20}"
 SEED_START="${SEED_START:-0}"
 NUM_SEEDS="${NUM_SEEDS:-5}"
+REAL_DATASET_NAME="${REAL_DATASET_NAME:-titanic}"
+REAL_REGRESSION_DATASET_NAME="${REAL_REGRESSION_DATASET_NAME:-california_housing}"
 LEARNING_RATE="${LEARNING_RATE:-0.05}"
 MIN_SAMPLES_LEAF="${MIN_SAMPLES_LEAF:-5}"
 SUBSAMPLE="${SUBSAMPLE:-1.0}"
@@ -133,7 +136,7 @@ CTB_ETA="${CTB_ETA:-0.1}"
 CTB_INSTABILITY_PENALTY="${CTB_INSTABILITY_PENALTY:-0.2}"
 CTB_WEIGHT_POWER="${CTB_WEIGHT_POWER:-1.0}"
 CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
-CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy}"
+CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy loss_aware}"
 CTB_CURVATURE_EPS="${CTB_CURVATURE_EPS:-1e-6}"
 
 run_repo_script scripts/run_group_risk_trajectory_benchmark.py \

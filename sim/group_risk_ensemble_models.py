@@ -17,6 +17,7 @@ from sklearn.metrics import log_loss, mean_squared_error
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from .ctb_core import ConsensusTransportBoosting
+from .ctb_semantics import ctb_tree_model_name, is_ctb_tree_family_name, normalize_ctb_tree_family_name
 
 try:  # pragma: no cover
     from xgboost import XGBClassifier, XGBRegressor
@@ -49,15 +50,18 @@ class EnsembleModelConfig:
 
     @property
     def model_name(self) -> str:
-        base = f"{self.family}_depth{self.max_depth}"
+        family = normalize_ctb_tree_family_name(self.family)
+        if is_ctb_tree_family_name(family):
+            return ctb_tree_model_name(
+                depth=int(self.max_depth),
+                task_type=str(self.task_type),
+                update_target_mode=str(self.ctb_target_mode),
+                transport_curvature_eps=float(self.ctb_curvature_eps),
+                include_task_suffix=True,
+            )
+        base = f"{family}_depth{self.max_depth}"
         if str(self.task_type).strip().lower() != "classification":
             base = f"{base}_{str(self.task_type).strip().lower()}"
-        if str(self.family).strip().lower() == "ctb":
-            target_mode = str(self.ctb_target_mode).strip().lower()
-            curvature_eps = float(self.ctb_curvature_eps)
-            if target_mode != "legacy" or abs(curvature_eps - 1e-6) > 0.0:
-                fmt_eps = f"{curvature_eps:g}".replace("-", "m").replace(".", "p")
-                base = f"{base}__mode-{target_mode}__ceps-{fmt_eps}"
         return base
 
     def to_dict(self) -> Dict[str, object]:
@@ -88,7 +92,7 @@ class EnsembleWrapperBase:
 
     @property
     def family_name(self) -> str:
-        return str(self.config.family)
+        return normalize_ctb_tree_family_name(self.config.family)
 
     @property
     def selection_metric_name(self) -> str:
@@ -433,7 +437,7 @@ def build_ensemble_wrapper(
     selection_checkpoints: Sequence[int],
     trajectory_checkpoints: Sequence[int],
 ):
-    family = str(config.family).strip().lower()
+    family = normalize_ctb_tree_family_name(config.family)
     task_type = str(config.task_type).strip().lower()
     if task_type == "classification":
         if family == "bagging":
@@ -490,7 +494,7 @@ def expand_model_grid(
 ) -> List[EnsembleModelConfig]:
     grid: List[EnsembleModelConfig] = []
     for family in families:
-        family_name = str(family)
+        family_name = normalize_ctb_tree_family_name(family)
         if family_name == "ctb":
             for depth in max_depths:
                 for target_mode in ctb_target_modes:

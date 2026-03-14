@@ -9,6 +9,7 @@ from sklearn.linear_model import lasso_path
 from sklearn.metrics import mean_squared_error
 
 from .ctb_core import ConsensusTransportBoosting
+from .ctb_semantics import ctb_tree_model_name
 from .sparse_recovery_data import SparseRegressionSplit
 
 try:  # pragma: no cover
@@ -131,11 +132,12 @@ class CTBTreeConfig:
 
     @property
     def model_name(self) -> str:
-        fmt_eps = f"{float(self.transport_curvature_eps):g}".replace("-", "m").replace(".", "p")
-        base = f"ctb_tree_depth{int(self.max_depth)}"
-        if str(self.update_target_mode) != "legacy" or abs(float(self.transport_curvature_eps) - 1e-6) > 0.0:
-            base = f"{base}__mode-{self.update_target_mode}__ceps-{fmt_eps}"
-        return base
+        return ctb_tree_model_name(
+            depth=int(self.max_depth),
+            update_target_mode=str(self.update_target_mode),
+            transport_curvature_eps=float(self.transport_curvature_eps),
+            include_task_suffix=False,
+        ).replace("ctb_depth", "ctb_tree_depth", 1)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

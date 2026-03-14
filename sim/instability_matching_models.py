@@ -14,6 +14,7 @@ from sklearn.ensemble import (
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from sim.ctb_core import ConsensusTransportBoosting
+from sim.ctb_semantics import ctb_tree_method_aliases
 
 try:
     from xgboost import XGBClassifier, XGBRegressor
@@ -122,8 +123,8 @@ def make_default_learner_specs(
         ),
     )
 
-    specs["ctb_stump_regression"] = LearnerSpec(
-        name="ctb_stump_regression",
+    ctb_stump_regression_spec = LearnerSpec(
+        name=ctb_tree_method_aliases(depth=1, task_type="regression")[0],
         task_type="regression",
         estimator=ConsensusTransportBoosting(
             task_type="regression",
@@ -140,8 +141,10 @@ def make_default_learner_specs(
             random_state=random_state,
         ),
     )
-    specs["ctb_depth3_regression"] = LearnerSpec(
-        name="ctb_depth3_regression",
+    for alias in ctb_tree_method_aliases(depth=1, task_type="regression"):
+        specs[alias] = ctb_stump_regression_spec
+    ctb_depth3_regression_spec = LearnerSpec(
+        name=ctb_tree_method_aliases(depth=3, task_type="regression")[0],
         task_type="regression",
         estimator=ConsensusTransportBoosting(
             task_type="regression",
@@ -158,6 +161,8 @@ def make_default_learner_specs(
             random_state=random_state,
         ),
     )
+    for alias in ctb_tree_method_aliases(depth=3, task_type="regression"):
+        specs[alias] = ctb_depth3_regression_spec
 
     specs["bagging_tree_deep_classification"] = LearnerSpec(
         name="bagging_tree_deep_classification",
@@ -204,8 +209,8 @@ def make_default_learner_specs(
         ),
     )
 
-    specs["ctb_stump_classification"] = LearnerSpec(
-        name="ctb_stump_classification",
+    ctb_stump_classification_spec = LearnerSpec(
+        name=ctb_tree_method_aliases(depth=1, task_type="classification")[0],
         task_type="classification",
         estimator=ConsensusTransportBoosting(
             task_type="classification",
@@ -222,8 +227,10 @@ def make_default_learner_specs(
             random_state=random_state,
         ),
     )
-    specs["ctb_depth3_classification"] = LearnerSpec(
-        name="ctb_depth3_classification",
+    for alias in ctb_tree_method_aliases(depth=1, task_type="classification"):
+        specs[alias] = ctb_stump_classification_spec
+    ctb_depth3_classification_spec = LearnerSpec(
+        name=ctb_tree_method_aliases(depth=3, task_type="classification")[0],
         task_type="classification",
         estimator=ConsensusTransportBoosting(
             task_type="classification",
@@ -240,6 +247,8 @@ def make_default_learner_specs(
             random_state=random_state,
         ),
     )
+    for alias in ctb_tree_method_aliases(depth=3, task_type="classification"):
+        specs[alias] = ctb_depth3_classification_spec
 
     if XGBRegressor is not None and XGBClassifier is not None:
         specs["xgboost_regression"] = LearnerSpec(

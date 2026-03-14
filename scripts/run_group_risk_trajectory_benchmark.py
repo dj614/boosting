@@ -47,6 +47,7 @@ from real_data.schema import (  # noqa: E402
     DEFAULT_REAL_PROCESSED_ROOT,
     DEFAULT_REAL_SPLIT_ROOT,
 )
+from sim.ctb_semantics import normalize_ctb_tree_family_name  # noqa: E402
 from sim.group_risk_ensemble_models import (  # noqa: E402
     EnsembleModelConfig,
     build_ensemble_wrapper,
@@ -431,7 +432,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
             dataset_name=dataset.dataset_name,
             split=split_name,
             seed=seed,
-            family_name=model_config.family,
+            family_name=normalize_ctb_tree_family_name(model_config.family),
             model_name=model_config.model_name,
             selected_checkpoint=int(wrapper.selected_checkpoint_),
         )
@@ -476,7 +477,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
                 split=split_name,
                 seed=seed,
                 model_name=model_config.model_name,
-                family_name=model_config.family,
+                family_name=normalize_ctb_tree_family_name(model_config.family),
                 group=split.group,
                 y_true=split.y,
                 y_pred=prediction,
@@ -496,7 +497,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
                 dataset_name=dataset.dataset_name,
                 split_name=split_name,
                 seed=seed,
-                family_name=model_config.family,
+                family_name=normalize_ctb_tree_family_name(model_config.family),
                 model_name=model_config.model_name,
                 selected_checkpoint=int(wrapper.selected_checkpoint_),
                 split=split,
@@ -509,7 +510,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
                 dataset_name=dataset.dataset_name,
                 split_name=split_name,
                 seed=seed,
-                family_name=model_config.family,
+                family_name=normalize_ctb_tree_family_name(model_config.family),
                 model_name=model_config.model_name,
                 selected_checkpoint=int(wrapper.selected_checkpoint_),
                 split=split,
@@ -522,7 +523,7 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
             dataset_name=dataset.dataset_name,
             split_name=split_name,
             seed=seed,
-            family_name=model_config.family,
+            family_name=normalize_ctb_tree_family_name(model_config.family),
             model_name=model_config.model_name,
             selected_checkpoint=int(wrapper.selected_checkpoint_),
             split=split,

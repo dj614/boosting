@@ -17,6 +17,7 @@ from sklearn.metrics import accuracy_score, log_loss, mean_squared_error
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from .ctb_core import ConsensusTransportBoosting
+from .ctb_semantics import ctb_tree_model_name, is_ctb_tree_family_name, normalize_ctb_tree_family_name
 
 try:  # pragma: no cover
     from xgboost import XGBClassifier, XGBRegressor
@@ -49,7 +50,16 @@ class TabularBenchmarkModelConfig:
 
     @property
     def model_name(self) -> str:
-        return f"{self.family}_depth{self.max_depth}"
+        family = normalize_ctb_tree_family_name(self.family)
+        if is_ctb_tree_family_name(family):
+            return ctb_tree_model_name(
+                depth=int(self.max_depth),
+                task_type=str(self.task_type),
+                update_target_mode=str(self.ctb_target_mode),
+                transport_curvature_eps=float(self.ctb_curvature_eps),
+                include_task_suffix=False,
+            )
+        return f"{family}_depth{self.max_depth}"
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -423,7 +433,7 @@ def build_tabular_benchmark_wrapper(
     use_report_metric_for_selection: bool = False,
 ) -> TabularBenchmarkWrapper:
     task_type = str(config.task_type).strip().lower()
-    family = str(config.family).strip().lower()
+    family = normalize_ctb_tree_family_name(config.family)
     if task_type == "classification":
         if family == "bagging":
             return BaggingBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
@@ -504,7 +514,7 @@ def expand_tabular_model_grid(
         raise ValueError(f"Unsupported task_type={task_type!r}")
 
     for family_name in families:
-        family = str(family_name).strip().lower()
+        family = normalize_ctb_tree_family_name(family_name)
         if family not in FAMILY_DEFAULTS:
             raise ValueError(f"Unsupported family={family!r}")
         default_overrides = FAMILY_DEFAULTS[family]
@@ -515,7 +525,7 @@ def expand_tabular_model_grid(
         family_etas = tuple(default_overrides.get("eta", etas))
         family_ctb_target_modes = tuple(default_overrides.get("ctb_target_mode", ctb_target_modes))
         family_ctb_curvature_eps = tuple(default_overrides.get("ctb_curvature_eps", ctb_curvature_eps))
-        if task_type != "classification" or family != "ctb":
+        if family != "ctb":
             family_ctb_target_modes = (str(family_ctb_target_modes[0]),)
             family_ctb_curvature_eps = (float(family_ctb_curvature_eps[0]),)
 

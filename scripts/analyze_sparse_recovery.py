@@ -128,7 +128,9 @@ def main() -> None:
     outdir: Path = args.outdir or (input_dir / "analysis")
     outdir.mkdir(parents=True, exist_ok=True)
 
-    trial_path = input_dir / "trial_metrics.csv"
+    trial_path = input_dir / "trial_metrics_family_selected.csv"
+    if not trial_path.exists():
+        trial_path = input_dir / "trial_metrics.csv"
     if not trial_path.exists():
         raise FileNotFoundError(f"Missing trial metrics file: {trial_path}")
     trial_df = pd.read_csv(trial_path)
@@ -181,6 +183,7 @@ def main() -> None:
     summary_payload = {
         "n_trials": float(len(trial_df)),
         "designs": sorted(trial_df["design"].dropna().astype(str).unique().tolist()),
+        "families": sorted(trial_df["family_name"].dropna().astype(str).unique().tolist()) if "family_name" in trial_df.columns else [],
         "models": sorted(trial_df["model_name"].dropna().astype(str).unique().tolist()),
         "design_summary": manifest_rows,
         "feature_frequency_manifest": feature_manifest,

@@ -42,7 +42,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=["l2boost", "bagged_componentwise", "ctb_sparse", "lasso", "xgb_tree"],
+        choices=["l2boost", "bagged_componentwise", "ctb_sparse", "ctb_tree", "lasso", "xgb_tree"],
         default=["l2boost", "bagged_componentwise", "ctb_sparse", "lasso", "xgb_tree"],
     )
     parser.add_argument("--num-seeds", type=int, default=10)
@@ -71,6 +71,10 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-min-consensus-frequency", type=float, default=0.25)
     parser.add_argument("--ctb-min-sign-consistency", type=float, default=0.75)
     parser.add_argument("--ctb-support-frequency-threshold", type=float, default=0.05)
+    parser.add_argument("--ctb-tree-max-depths", nargs="*", type=int, default=[1, 3])
+    parser.add_argument("--ctb-tree-min-samples-leaf", type=int, default=5)
+    parser.add_argument("--ctb-target-modes", nargs="*", default=["legacy"])
+    parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
     parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--save-feature-tables", action="store_true")
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment4_sparse_recovery"))
@@ -87,8 +91,8 @@ def _save_table(frame: pd.DataFrame, path: Path) -> None:
     frame.to_csv(path, index=False)
 
 
-def _resolve_support_hat(model_name: str, model: object, dataset, xgb_support_k: int | None) -> tuple[np.ndarray, str]:
-    if model_name == "xgb_tree":
+def _resolve_support_hat(model_family: str, model: object, dataset, xgb_support_k: int | None) -> tuple[np.ndarray, str]:
+    if model_family in {"xgb_tree", "ctb_tree"}:
         k = int(xgb_support_k or dataset.support_true.shape[0])
         support_hat = np.asarray(model.topk_support(k), dtype=int)
         return support_hat, f"topk_importance@{k}"
@@ -96,7 +100,7 @@ def _resolve_support_hat(model_name: str, model: object, dataset, xgb_support_k:
     return support_hat, "native"
 
 
-def _feature_frame_for_model(model_name: str, model: object, dataset, support_hat: Sequence[int], support_mode: str) -> pd.DataFrame:
+def _feature_frame_for_model(model_family: str, model: object, dataset, support_hat: Sequence[int], support_mode: str) -> pd.DataFrame:
     p = dataset.train.X.shape[1]
     feature_names = dataset.feature_names
     extra_columns = {
@@ -104,14 +108,14 @@ def _feature_frame_for_model(model_name: str, model: object, dataset, support_ha
         "true_beta": dataset.beta_true,
     }
 
-    if model_name in {"bagged_componentwise", "ctb_sparse"} and getattr(model, "selection_frequency_", None) is not None:
+    if model_family in {"bagged_componentwise", "ctb_sparse"} and getattr(model, "selection_frequency_", None) is not None:
         frame = make_feature_support_frame(
             selection_frequency=np.asarray(model.selection_frequency_, dtype=float),
             support_true=dataset.support_true,
             feature_names=feature_names,
             extra_columns=extra_columns,
         )
-    elif model_name == "xgb_tree" and getattr(model, "feature_importances_", None) is not None:
+    elif model_family in {"xgb_tree", "ctb_tree"} and getattr(model, "feature_importances_", None) is not None:
         frame = make_feature_support_frame(
             selection_frequency=np.asarray(model.feature_importances_, dtype=float),
             support_true=dataset.support_true,
@@ -134,18 +138,41 @@ def _feature_frame_for_model(model_name: str, model: object, dataset, support_ha
     return frame
 
 
-def _trial_row(*, design: str, rep: int, model_name: str, dataset, model: object, support_hat: np.ndarray, support_mode: str) -> Dict[str, object]:
+def _selected_valid_metric(model: object) -> float | None:
+    trace = getattr(model, "selection_trace_", None)
+    if not isinstance(trace, pd.DataFrame) or trace.empty or "valid_mse" not in trace.columns:
+        return None
+    if getattr(model, "selected_checkpoint_", None) is not None and "checkpoint" in trace.columns:
+        sub = trace.loc[trace["checkpoint"].astype(int) == int(model.selected_checkpoint_)]
+        if not sub.empty:
+            return float(sub["valid_mse"].iloc[0])
+    if getattr(model, "selected_step_", None) is not None and "checkpoint" in trace.columns:
+        sub = trace.loc[trace["checkpoint"].astype(int) == int(model.selected_step_)]
+        if not sub.empty:
+            return float(sub["valid_mse"].iloc[0])
+    if getattr(model, "selected_alpha_", None) is not None and "alpha" in trace.columns:
+        sub = trace.loc[np.isclose(trace["alpha"].astype(float), float(model.selected_alpha_))]
+        if not sub.empty:
+            return float(sub["valid_mse"].iloc[0])
+    return None
+
+
+def _trial_row(*, design: str, rep: int, family_name: str, model_name: str, dataset, model: object, support_hat: np.ndarray, support_mode: str) -> Dict[str, object]:
     test_pred = np.asarray(model.predict(dataset.test.X), dtype=float)
     row: Dict[str, object] = {
         "design": design,
         "rep": rep,
         "seed": int(dataset.config["seed"]),
+        "family_name": family_name,
         "model_name": model_name,
         "p": int(dataset.train.X.shape[1]),
         "s": int(dataset.support_true.shape[0]),
         "support_eval_mode": support_mode,
         "support_hat_json": json.dumps([int(x) for x in np.asarray(support_hat, dtype=int).tolist()]),
     }
+    valid_mse_selected = _selected_valid_metric(model)
+    if valid_mse_selected is not None:
+        row["valid_mse_selected"] = float(valid_mse_selected)
     row.update({f"test_{k}": v for k, v in regression_metrics(dataset.test.y, test_pred).items()})
     row.update({f"support_{k}": v for k, v in support_recovery_metrics(dataset.support_true, support_hat, p=dataset.train.X.shape[1]).items()})
 
@@ -165,7 +192,9 @@ def _run_model_trial(task: Dict[str, object]) -> Dict[str, object]:
     design = str(task["design"])
     rep = int(task["rep"])
     seed = int(task["base_seed"]) + rep
-    model_name = str(task["model_name"])
+    base_model_name = str(task["base_model_name"])
+    family_name = str(task.get("family_name", base_model_name))
+    model_name = str(task.get("model_name", base_model_name))
     dataset = generate_sparse_regression_dataset(
         n_train=int(task["n_train"]),
         n_valid=int(task["n_valid"]),
@@ -185,7 +214,7 @@ def _run_model_trial(task: Dict[str, object]) -> Dict[str, object]:
     dataset_summary.update({"design": design, "rep": rep, "seed": seed})
 
     model_kwargs = {"random_state": seed}
-    if model_name == "ctb_sparse":
+    if base_model_name == "ctb_sparse":
         model_kwargs.update(
             max_steps=int(task["ctb_max_steps"]),
             n_inner_bootstraps=int(task["ctb_inner_bootstraps"]),
@@ -200,21 +229,36 @@ def _run_model_trial(task: Dict[str, object]) -> Dict[str, object]:
             min_sign_consistency=float(task["ctb_min_sign_consistency"]),
             support_frequency_threshold=float(task["ctb_support_frequency_threshold"]),
         )
-    model = build_experiment4_model(model_name=model_name, **model_kwargs)
+    if base_model_name == "ctb_tree":
+        model_kwargs.update(
+            n_estimators=int(task["ctb_max_steps"]),
+            n_inner_bootstraps=int(task["ctb_inner_bootstraps"]),
+            eta=float(task["ctb_eta"]),
+            max_depth=int(task["ctb_tree_max_depth"]),
+            min_samples_leaf=int(task["ctb_tree_min_samples_leaf"]),
+            update_target_mode=str(task["ctb_target_mode"]),
+            transport_curvature_eps=float(task["ctb_curvature_eps"]),
+            instability_penalty=0.0,
+            weight_power=float(task["ctb_residual_weight_power"]),
+            weight_eps=float(task["ctb_residual_weight_eps"]),
+        )
+    model = build_experiment4_model(model_name=base_model_name, **model_kwargs)
     model.fit(dataset.train, dataset.valid)
-    support_hat, support_mode = _resolve_support_hat(model_name, model, dataset, task["xgb_support_k"])
+    support_hat, support_mode = _resolve_support_hat(family_name, model, dataset, task["xgb_support_k"])
 
     trace = getattr(model, "selection_trace_", None)
     if trace is not None:
         trace = trace.copy()
         trace.insert(0, "model_name", model_name)
+        trace.insert(0, "family_name", family_name)
         trace.insert(0, "rep", rep)
         trace.insert(0, "design", design)
         _save_table(trace, Path(task["traces_dir"]) / f"{design}__rep{rep:02d}__{model_name}.csv")
 
     if bool(task["save_feature_tables"]):
-        feature_frame = _feature_frame_for_model(model_name, model, dataset, support_hat, support_mode)
+        feature_frame = _feature_frame_for_model(family_name, model, dataset, support_hat, support_mode)
         feature_frame.insert(0, "model_name", model_name)
+        feature_frame.insert(0, "family_name", family_name)
         feature_frame.insert(0, "rep", rep)
         feature_frame.insert(0, "design", design)
         _save_table(feature_frame, Path(task["features_dir"]) / f"{design}__rep{rep:02d}__{model_name}.csv")
@@ -223,6 +267,7 @@ def _run_model_trial(task: Dict[str, object]) -> Dict[str, object]:
         "trial_row": _trial_row(
             design=design,
             rep=rep,
+            family_name=family_name,
             model_name=model_name,
             dataset=dataset,
             model=model,
@@ -271,6 +316,10 @@ def main() -> None:
         "ctb_min_consensus_frequency": args.ctb_min_consensus_frequency,
         "ctb_min_sign_consistency": args.ctb_min_sign_consistency,
         "ctb_support_frequency_threshold": args.ctb_support_frequency_threshold,
+        "ctb_tree_max_depths": [int(x) for x in args.ctb_tree_max_depths],
+        "ctb_tree_min_samples_leaf": int(args.ctb_tree_min_samples_leaf),
+        "ctb_target_modes": [str(x) for x in args.ctb_target_modes],
+        "ctb_curvature_eps": [float(x) for x in args.ctb_curvature_eps],
         "n_jobs": args.n_jobs,
         "save_feature_tables": bool(args.save_feature_tables),
     }
@@ -282,12 +331,64 @@ def main() -> None:
     tasks: List[Dict[str, object]] = []
     for design in args.designs:
         for rep in range(args.num_seeds):
-            for model_name in args.models:
+            for requested_model_name in args.models:
+                if str(requested_model_name) == "ctb_tree":
+                    for depth in args.ctb_tree_max_depths:
+                        for target_mode in args.ctb_target_modes:
+                            for curvature_eps in args.ctb_curvature_eps:
+                                fmt_eps = f"{float(curvature_eps):g}".replace("-", "m").replace(".", "p")
+                                candidate_name = f"ctb_tree_depth{int(depth)}"
+                                if str(target_mode) != "legacy" or abs(float(curvature_eps) - 1e-6) > 0.0:
+                                    candidate_name = f"{candidate_name}__mode-{str(target_mode)}__ceps-{fmt_eps}"
+                                tasks.append(
+                                    {
+                                        "design": design,
+                                        "rep": rep,
+                                        "base_model_name": "ctb_tree",
+                                        "family_name": "ctb_tree",
+                                        "model_name": candidate_name,
+                                        "ctb_tree_max_depth": int(depth),
+                                        "ctb_tree_min_samples_leaf": int(args.ctb_tree_min_samples_leaf),
+                                        "ctb_target_mode": str(target_mode),
+                                        "ctb_curvature_eps": float(curvature_eps),
+                                        "base_seed": int(args.base_seed),
+                                        "n_train": int(args.n_train),
+                                        "n_valid": int(args.n_valid),
+                                        "n_test": int(args.n_test),
+                                        "p": int(args.p),
+                                        "s": int(args.s),
+                                        "rho": float(args.rho),
+                                        "block_size": int(args.block_size),
+                                        "beta_scale": float(args.beta_scale),
+                                        "beta_pattern": args.beta_pattern,
+                                        "support_strategy": args.support_strategy,
+                                        "snr": float(args.snr),
+                                        "xgb_support_k": args.xgb_support_k,
+                                        "ctb_max_steps": int(args.ctb_max_steps),
+                                        "ctb_inner_bootstraps": int(args.ctb_inner_bootstraps),
+                                        "ctb_eta": float(args.ctb_eta),
+                                        "ctb_residual_weight_power": float(args.ctb_residual_weight_power),
+                                        "ctb_residual_weight_eps": float(args.ctb_residual_weight_eps),
+                                        "ctb_consensus_frequency_power": float(args.ctb_consensus_frequency_power),
+                                        "ctb_consensus_sign_power": float(args.ctb_consensus_sign_power),
+                                        "ctb_instability_lambda": float(args.ctb_instability_lambda),
+                                        "ctb_instability_power": float(args.ctb_instability_power),
+                                        "ctb_min_consensus_frequency": float(args.ctb_min_consensus_frequency),
+                                        "ctb_min_sign_consistency": float(args.ctb_min_sign_consistency),
+                                        "ctb_support_frequency_threshold": float(args.ctb_support_frequency_threshold),
+                                        "save_feature_tables": bool(args.save_feature_tables),
+                                        "traces_dir": str(traces_dir),
+                                        "features_dir": str(features_dir),
+                                    }
+                                )
+                    continue
                 tasks.append(
                     {
                         "design": design,
                         "rep": rep,
-                        "model_name": model_name,
+                        "base_model_name": str(requested_model_name),
+                        "family_name": str(requested_model_name),
+                        "model_name": str(requested_model_name),
                         "base_seed": int(args.base_seed),
                         "n_train": int(args.n_train),
                         "n_valid": int(args.n_valid),
@@ -343,11 +444,16 @@ def main() -> None:
     trial_df = pd.DataFrame(trial_rows)
     dataset_df = pd.DataFrame(dataset_row_map.values())
     _save_table(trial_df, outdir / "trial_metrics.csv")
+    if not trial_df.empty and "family_name" in trial_df.columns and "valid_mse_selected" in trial_df.columns:
+        family_selected_idx = trial_df.groupby(["design", "rep", "family_name"], dropna=False)["valid_mse_selected"].idxmin().dropna().astype(int).tolist()
+        family_selected_df = trial_df.loc[family_selected_idx].copy()
+        _save_table(family_selected_df, outdir / "trial_metrics_family_selected.csv")
     _save_table(dataset_df, outdir / "dataset_summaries.csv")
 
     quick_summary = {
         "n_trials": float(len(trial_df)),
         "designs": sorted(trial_df["design"].astype(str).unique().tolist()) if not trial_df.empty else [],
+        "families": sorted(trial_df["family_name"].astype(str).unique().tolist()) if (not trial_df.empty and "family_name" in trial_df.columns) else [],
         "models": sorted(trial_df["model_name"].astype(str).unique().tolist()) if not trial_df.empty else [],
     }
     _save_json(quick_summary, outdir / "artifact_summary.json")

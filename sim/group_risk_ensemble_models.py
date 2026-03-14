@@ -1,25 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import (
     BaggingClassifier,
+    BaggingRegressor,
     GradientBoostingClassifier,
+    GradientBoostingRegressor,
     RandomForestClassifier,
+    RandomForestRegressor,
 )
-from sklearn.metrics import log_loss
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import log_loss, mean_squared_error
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from .ctb_core import ConsensusTransportBoosting
-from .grouped_classification_data import BinaryClassificationSplit
 
 try:  # pragma: no cover
-    from xgboost import XGBClassifier
+    from xgboost import XGBClassifier, XGBRegressor
 except Exception:  # pragma: no cover
     XGBClassifier = None
+    XGBRegressor = None
 
 
 Array = np.ndarray
@@ -30,6 +33,7 @@ class EnsembleModelConfig:
     family: str
     max_depth: int
     n_estimators: int
+    task_type: str = "classification"
     min_samples_leaf: int = 5
     learning_rate: float = 0.05
     subsample: float = 1.0
@@ -39,17 +43,28 @@ class EnsembleModelConfig:
     instability_penalty: float = 0.0
     weight_power: float = 1.0
     weight_eps: float = 1e-8
+    ctb_target_mode: str = "legacy"
+    ctb_curvature_eps: float = 1e-6
     random_state: int = 0
 
     @property
     def model_name(self) -> str:
-        return f"{self.family}_depth{self.max_depth}"
+        base = f"{self.family}_depth{self.max_depth}"
+        if str(self.task_type).strip().lower() != "classification":
+            base = f"{base}_{str(self.task_type).strip().lower()}"
+        if str(self.family).strip().lower() == "ctb":
+            target_mode = str(self.ctb_target_mode).strip().lower()
+            curvature_eps = float(self.ctb_curvature_eps)
+            if target_mode != "legacy" or abs(curvature_eps - 1e-6) > 0.0:
+                fmt_eps = f"{curvature_eps:g}".replace("-", "m").replace(".", "p")
+                base = f"{base}__mode-{target_mode}__ceps-{fmt_eps}"
+        return base
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
 
 
-class BinaryEnsembleWrapper:
+class EnsembleWrapperBase:
     def __init__(
         self,
         config: EnsembleModelConfig,
@@ -71,52 +86,92 @@ class BinaryEnsembleWrapper:
     def model_name(self) -> str:
         return self.config.model_name
 
-    def fit(
-        self,
-        train_split: BinaryClassificationSplit,
-        valid_split: BinaryClassificationSplit,
-    ) -> "BinaryEnsembleWrapper":
+    @property
+    def family_name(self) -> str:
+        return str(self.config.family)
+
+    @property
+    def selection_metric_name(self) -> str:
+        raise NotImplementedError
+
+    def _selection_metric_value(self, y_true: Array, prediction: Array) -> float:
+        raise NotImplementedError
+
+    def fit(self, train_split, valid_split):
         self.model = self._build_estimator()
         self.model.fit(train_split.X, train_split.y)
-        valid_probs = self.predict_proba_staged(valid_split.X, checkpoints=self.selection_checkpoints)
+        valid_predictions = self._predict_at_checkpoints(valid_split.X, checkpoints=self.selection_checkpoints)
         rows: List[Dict[str, float]] = []
         best_checkpoint = None
-        best_loss = None
+        best_metric = None
         for checkpoint in self.selection_checkpoints:
-            prob = np.asarray(valid_probs[int(checkpoint)], dtype=float)
-            current_loss = float(log_loss(valid_split.y, np.clip(prob, 1e-8, 1.0 - 1e-8), labels=[0, 1]))
-            rows.append({"checkpoint": int(checkpoint), "valid_log_loss": current_loss})
-            if best_loss is None or current_loss < best_loss - 1e-12 or (
-                abs(current_loss - best_loss) <= 1e-12 and int(checkpoint) < int(best_checkpoint)
+            pred = np.asarray(valid_predictions[int(checkpoint)], dtype=float)
+            current_metric = float(self._selection_metric_value(valid_split.y, pred))
+            rows.append({"checkpoint": int(checkpoint), self.selection_metric_name: current_metric})
+            if best_metric is None or current_metric < best_metric - 1e-12 or (
+                abs(current_metric - best_metric) <= 1e-12 and int(checkpoint) < int(best_checkpoint)
             ):
-                best_loss = current_loss
+                best_metric = current_metric
                 best_checkpoint = int(checkpoint)
         self.selected_checkpoint_ = int(best_checkpoint)
         self.selection_trace_ = pd.DataFrame(rows)
         return self
 
+    def _build_estimator(self):
+        raise NotImplementedError
+
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        raise NotImplementedError
+
+
+class BinaryEnsembleWrapper(EnsembleWrapperBase):
+    @property
+    def selection_metric_name(self) -> str:
+        return "valid_log_loss"
+
+    def _selection_metric_value(self, y_true: Array, prediction: Array) -> float:
+        prob = np.clip(np.asarray(prediction, dtype=float), 1e-8, 1.0 - 1e-8)
+        return float(log_loss(np.asarray(y_true, dtype=int), prob, labels=[0, 1]))
+
     def predict_proba(self, X: Array, checkpoint: Optional[int] = None) -> Array:
         if self.model is None:
             raise RuntimeError("Model has not been fit")
         use_checkpoint = int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)
-        return np.asarray(self.predict_proba_staged(X, checkpoints=[use_checkpoint])[use_checkpoint], dtype=float)
+        return np.asarray(self._predict_at_checkpoints(X, checkpoints=[use_checkpoint])[use_checkpoint], dtype=float)
 
     def predict(self, X: Array, checkpoint: Optional[int] = None, threshold: float = 0.5) -> Array:
-        return (self.predict_proba(X, checkpoint=checkpoint) >= threshold).astype(int)
+        return (self.predict_proba(X, checkpoint=checkpoint) >= float(threshold)).astype(int)
 
     def predict_proba_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
         if self.model is None:
             raise RuntimeError("Model has not been fit")
-        return self._predict_proba_at_checkpoints(X, checkpoints=checkpoints)
+        return self._predict_at_checkpoints(X, checkpoints=checkpoints)
 
     def trajectory(self, X: Array) -> Dict[int, Array]:
         return self.predict_proba_staged(X, checkpoints=self.trajectory_checkpoints)
 
-    def _build_estimator(self):
-        raise NotImplementedError
 
-    def _predict_proba_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
-        raise NotImplementedError
+class RegressionEnsembleWrapper(EnsembleWrapperBase):
+    @property
+    def selection_metric_name(self) -> str:
+        return "valid_mse"
+
+    def _selection_metric_value(self, y_true: Array, prediction: Array) -> float:
+        return float(mean_squared_error(np.asarray(y_true, dtype=float), np.asarray(prediction, dtype=float)))
+
+    def predict(self, X: Array, checkpoint: Optional[int] = None) -> Array:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        use_checkpoint = int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)
+        return np.asarray(self._predict_at_checkpoints(X, checkpoints=[use_checkpoint])[use_checkpoint], dtype=float)
+
+    def predict_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        return self._predict_at_checkpoints(X, checkpoints=checkpoints)
+
+    def trajectory(self, X: Array) -> Dict[int, Array]:
+        return self.predict_staged(X, checkpoints=self.trajectory_checkpoints)
 
 
 class BaggingBinaryWrapper(BinaryEnsembleWrapper):
@@ -133,9 +188,28 @@ class BaggingBinaryWrapper(BinaryEnsembleWrapper):
             n_jobs=1,
         )
 
-    def _predict_proba_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
         estimator_probs = [np.asarray(est.predict_proba(X)[:, 1], dtype=float) for est in self.model.estimators_]
-        return _prefix_average_predictions(estimator_probs=estimator_probs, checkpoints=checkpoints)
+        return _prefix_average_predictions(estimator_outputs=estimator_probs, checkpoints=checkpoints)
+
+
+class BaggingRegressionWrapper(RegressionEnsembleWrapper):
+    def _build_estimator(self):
+        return BaggingRegressor(
+            estimator=DecisionTreeRegressor(
+                max_depth=self.config.max_depth,
+                min_samples_leaf=self.config.min_samples_leaf,
+                random_state=self.config.random_state,
+            ),
+            n_estimators=self.config.n_estimators,
+            bootstrap=True,
+            random_state=self.config.random_state,
+            n_jobs=1,
+        )
+
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        estimator_preds = [np.asarray(est.predict(X), dtype=float) for est in self.model.estimators_]
+        return _prefix_average_predictions(estimator_outputs=estimator_preds, checkpoints=checkpoints)
 
 
 class RandomForestBinaryWrapper(BinaryEnsembleWrapper):
@@ -149,9 +223,25 @@ class RandomForestBinaryWrapper(BinaryEnsembleWrapper):
             n_jobs=1,
         )
 
-    def _predict_proba_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
         estimator_probs = [np.asarray(est.predict_proba(X)[:, 1], dtype=float) for est in self.model.estimators_]
-        return _prefix_average_predictions(estimator_probs=estimator_probs, checkpoints=checkpoints)
+        return _prefix_average_predictions(estimator_outputs=estimator_probs, checkpoints=checkpoints)
+
+
+class RandomForestRegressionWrapper(RegressionEnsembleWrapper):
+    def _build_estimator(self):
+        return RandomForestRegressor(
+            n_estimators=self.config.n_estimators,
+            max_depth=self.config.max_depth,
+            min_samples_leaf=self.config.min_samples_leaf,
+            bootstrap=True,
+            random_state=self.config.random_state,
+            n_jobs=1,
+        )
+
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        estimator_preds = [np.asarray(est.predict(X), dtype=float) for est in self.model.estimators_]
+        return _prefix_average_predictions(estimator_outputs=estimator_preds, checkpoints=checkpoints)
 
 
 class GradientBoostingBinaryWrapper(BinaryEnsembleWrapper):
@@ -164,13 +254,36 @@ class GradientBoostingBinaryWrapper(BinaryEnsembleWrapper):
             random_state=self.config.random_state,
         )
 
-    def _predict_proba_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
         requested = sorted({int(x) for x in checkpoints})
         requested_set = set(requested)
         out: Dict[int, Array] = {}
         for idx, proba in enumerate(self.model.staged_predict_proba(X), start=1):
             if idx in requested_set:
                 out[idx] = np.asarray(proba[:, 1], dtype=float)
+            if len(out) == len(requested):
+                break
+        _validate_checkpoint_outputs(requested, out, self.config.n_estimators)
+        return out
+
+
+class GradientBoostingRegressionWrapper(RegressionEnsembleWrapper):
+    def _build_estimator(self):
+        return GradientBoostingRegressor(
+            learning_rate=self.config.learning_rate,
+            n_estimators=self.config.n_estimators,
+            max_depth=self.config.max_depth,
+            subsample=self.config.subsample,
+            random_state=self.config.random_state,
+        )
+
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        requested = sorted({int(x) for x in checkpoints})
+        requested_set = set(requested)
+        out: Dict[int, Array] = {}
+        for idx, pred in enumerate(self.model.staged_predict(X), start=1):
+            if idx in requested_set:
+                out[idx] = np.asarray(pred, dtype=float)
             if len(out) == len(requested):
                 break
         _validate_checkpoint_outputs(requested, out, self.config.n_estimators)
@@ -197,12 +310,39 @@ class XGBoostBinaryWrapper(BinaryEnsembleWrapper):
             verbosity=0,
         )
 
-    def _predict_proba_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
         requested = sorted({int(x) for x in checkpoints})
         out: Dict[int, Array] = {}
         for checkpoint in requested:
             proba = self.model.predict_proba(X, iteration_range=(0, int(checkpoint)))
             out[int(checkpoint)] = np.asarray(proba[:, 1], dtype=float)
+        return out
+
+
+class XGBoostRegressionWrapper(RegressionEnsembleWrapper):
+    def _build_estimator(self):
+        if XGBRegressor is None:  # pragma: no cover
+            raise ImportError("xgboost is not installed, but family='xgb' was requested")
+        return XGBRegressor(
+            n_estimators=self.config.n_estimators,
+            max_depth=self.config.max_depth,
+            learning_rate=self.config.learning_rate,
+            subsample=self.config.subsample,
+            colsample_bytree=self.config.colsample_bytree,
+            reg_lambda=1.0,
+            objective="reg:squarederror",
+            tree_method="hist",
+            random_state=self.config.random_state,
+            n_jobs=1,
+            verbosity=0,
+        )
+
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        requested = sorted({int(x) for x in checkpoints})
+        out: Dict[int, Array] = {}
+        for checkpoint in requested:
+            pred = self.model.predict(X, iteration_range=(0, int(checkpoint)))
+            out[int(checkpoint)] = np.asarray(pred, dtype=float)
         return out
 
 
@@ -216,12 +356,14 @@ class CTBBinaryWrapper(BinaryEnsembleWrapper):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
+            update_target_mode=self.config.ctb_target_mode,
+            transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
             random_state=self.config.random_state,
         )
 
-    def _predict_proba_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
         requested = sorted({int(x) for x in checkpoints})
         staged = self.model.predict_proba_staged(X, checkpoints=requested)
         out: Dict[int, Array] = {}
@@ -229,6 +371,34 @@ class CTBBinaryWrapper(BinaryEnsembleWrapper):
             out[int(checkpoint)] = np.asarray(proba[:, 1], dtype=float)
         _validate_checkpoint_outputs(requested, out, self.config.n_estimators)
         return out
+
+
+class CTBRegressionWrapper(RegressionEnsembleWrapper):
+    def _build_estimator(self):
+        return ConsensusTransportBoosting(
+            task_type="regression",
+            n_estimators=self.config.n_estimators,
+            n_inner_bootstraps=self.config.inner_bootstraps,
+            eta=self.config.eta,
+            instability_penalty=self.config.instability_penalty,
+            weight_power=self.config.weight_power,
+            weight_eps=self.config.weight_eps,
+            update_target_mode=self.config.ctb_target_mode,
+            transport_curvature_eps=self.config.ctb_curvature_eps,
+            max_depth=self.config.max_depth,
+            min_samples_leaf=self.config.min_samples_leaf,
+            random_state=self.config.random_state,
+        )
+
+    def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        requested = sorted({int(x) for x in checkpoints})
+        staged = self.model.decision_function_staged(X, checkpoints=requested)
+        out: Dict[int, Array] = {}
+        for checkpoint, pred in staged.items():
+            out[int(checkpoint)] = np.asarray(pred, dtype=float)
+        _validate_checkpoint_outputs(requested, out, self.config.n_estimators)
+        return out
+
 
 def _validate_checkpoint_outputs(requested: Sequence[int], out: Mapping[int, Array], max_checkpoint: int) -> None:
     missing = [int(x) for x in requested if int(x) not in out]
@@ -238,27 +408,56 @@ def _validate_checkpoint_outputs(requested: Sequence[int], out: Mapping[int, Arr
         )
 
 
-
-def _prefix_average_predictions(estimator_probs: Sequence[Array], checkpoints: Sequence[int]) -> Dict[int, Array]:
+def _prefix_average_predictions(estimator_outputs: Sequence[Array], checkpoints: Sequence[int]) -> Dict[int, Array]:
     requested = sorted({int(x) for x in checkpoints})
     if not requested:
         return {}
     max_requested = max(requested)
-    if max_requested > len(estimator_probs):
+    if max_requested > len(estimator_outputs):
         raise ValueError(
-            f"Requested checkpoint {max_requested}, but only {len(estimator_probs)} estimators are available"
+            f"Requested checkpoint {max_requested}, but only {len(estimator_outputs)} estimators are available"
         )
-
-    running = np.zeros_like(estimator_probs[0], dtype=float)
+    running = np.zeros_like(np.asarray(estimator_outputs[0], dtype=float), dtype=float)
     out: Dict[int, Array] = {}
     requested_set = set(requested)
-    for idx, prob in enumerate(estimator_probs, start=1):
-        running += prob
+    for idx, values in enumerate(estimator_outputs, start=1):
+        running += np.asarray(values, dtype=float)
         if idx in requested_set:
             out[idx] = running / float(idx)
-    _validate_checkpoint_outputs(requested, out, len(estimator_probs))
+    _validate_checkpoint_outputs(requested, out, len(estimator_outputs))
     return out
 
+
+def build_ensemble_wrapper(
+    config: EnsembleModelConfig,
+    selection_checkpoints: Sequence[int],
+    trajectory_checkpoints: Sequence[int],
+):
+    family = str(config.family).strip().lower()
+    task_type = str(config.task_type).strip().lower()
+    if task_type == "classification":
+        if family == "bagging":
+            return BaggingBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
+        if family == "rf":
+            return RandomForestBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
+        if family == "gbdt":
+            return GradientBoostingBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
+        if family == "xgb":
+            return XGBoostBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
+        if family == "ctb":
+            return CTBBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
+    if task_type == "regression":
+        if family == "bagging":
+            return BaggingRegressionWrapper(config, selection_checkpoints, trajectory_checkpoints)
+        if family == "rf":
+            return RandomForestRegressionWrapper(config, selection_checkpoints, trajectory_checkpoints)
+        if family == "gbdt":
+            return GradientBoostingRegressionWrapper(config, selection_checkpoints, trajectory_checkpoints)
+        if family == "xgb":
+            return XGBoostRegressionWrapper(config, selection_checkpoints, trajectory_checkpoints)
+        if family == "ctb":
+            return CTBRegressionWrapper(config, selection_checkpoints, trajectory_checkpoints)
+    raise ValueError(f"Unsupported task_type={task_type!r} family={family!r}")
 
 
 def build_binary_ensemble_wrapper(
@@ -266,19 +465,9 @@ def build_binary_ensemble_wrapper(
     selection_checkpoints: Sequence[int],
     trajectory_checkpoints: Sequence[int],
 ) -> BinaryEnsembleWrapper:
-    family = str(config.family)
-    if family == "bagging":
-        return BaggingBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
-    if family == "rf":
-        return RandomForestBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
-    if family == "gbdt":
-        return GradientBoostingBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
-    if family == "xgb":
-        return XGBoostBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
-    if family == "ctb":
-        return CTBBinaryWrapper(config, selection_checkpoints, trajectory_checkpoints)
-    raise ValueError(f"Unsupported family={family!r}")
-
+    if str(config.task_type).strip().lower() != "classification":
+        raise ValueError("build_binary_ensemble_wrapper only supports classification configs")
+    return build_ensemble_wrapper(config, selection_checkpoints, trajectory_checkpoints)
 
 
 def expand_model_grid(
@@ -295,15 +484,45 @@ def expand_model_grid(
     weight_power: float,
     weight_eps: float,
     random_state: int,
+    task_type: str = "classification",
+    ctb_target_modes: Sequence[str] = ("legacy",),
+    ctb_curvature_eps: Sequence[float] = (1e-6,),
 ) -> List[EnsembleModelConfig]:
     grid: List[EnsembleModelConfig] = []
     for family in families:
+        family_name = str(family)
+        if family_name == "ctb":
+            for depth in max_depths:
+                for target_mode in ctb_target_modes:
+                    for curvature_eps in ctb_curvature_eps:
+                        grid.append(
+                            EnsembleModelConfig(
+                                family=family_name,
+                                max_depth=int(depth),
+                                n_estimators=int(n_estimators),
+                                task_type=str(task_type),
+                                min_samples_leaf=int(min_samples_leaf),
+                                learning_rate=float(learning_rate),
+                                subsample=float(subsample),
+                                colsample_bytree=float(colsample_bytree),
+                                inner_bootstraps=int(inner_bootstraps),
+                                eta=float(eta),
+                                instability_penalty=float(instability_penalty),
+                                weight_power=float(weight_power),
+                                weight_eps=float(weight_eps),
+                                ctb_target_mode=str(target_mode),
+                                ctb_curvature_eps=float(curvature_eps),
+                                random_state=int(random_state),
+                            )
+                        )
+            continue
         for depth in max_depths:
             grid.append(
                 EnsembleModelConfig(
-                    family=str(family),
+                    family=family_name,
                     max_depth=int(depth),
                     n_estimators=int(n_estimators),
+                    task_type=str(task_type),
                     min_samples_leaf=int(min_samples_leaf),
                     learning_rate=float(learning_rate),
                     subsample=float(subsample),

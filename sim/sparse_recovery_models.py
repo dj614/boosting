@@ -8,6 +8,7 @@ import pandas as pd
 from sklearn.linear_model import lasso_path
 from sklearn.metrics import mean_squared_error
 
+from .ctb_core import ConsensusTransportBoosting
 from .sparse_recovery_data import SparseRegressionSplit
 
 try:  # pragma: no cover
@@ -109,6 +110,32 @@ class XGBTreeConfig:
     @property
     def model_name(self) -> str:
         return "xgb_tree"
+
+    def to_dict(self) -> Dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CTBTreeConfig:
+    n_estimators: int = 300
+    n_inner_bootstraps: int = 8
+    eta: float = 1.0
+    max_depth: int = 1
+    min_samples_leaf: int = 5
+    instability_penalty: float = 0.0
+    weight_power: float = 1.0
+    weight_eps: float = 1e-8
+    update_target_mode: str = "legacy"
+    transport_curvature_eps: float = 1e-6
+    random_state: int = 0
+
+    @property
+    def model_name(self) -> str:
+        fmt_eps = f"{float(self.transport_curvature_eps):g}".replace("-", "m").replace(".", "p")
+        base = f"ctb_tree_depth{int(self.max_depth)}"
+        if str(self.update_target_mode) != "legacy" or abs(float(self.transport_curvature_eps) - 1e-6) > 0.0:
+            base = f"{base}__mode-{self.update_target_mode}__ceps-{fmt_eps}"
+        return base
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -941,6 +968,107 @@ class XGBTreeRegressorWrapper(SparseRegressionWrapperBase):
         return np.sort(order[:k].astype(int))
 
 
+class CTBTreeRegressorWrapper(SparseRegressionWrapperBase):
+    def __init__(
+        self,
+        config: CTBTreeConfig,
+        selection_checkpoints: Optional[Sequence[int]] = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.selection_checkpoints = _resolve_checkpoints(
+            selection_checkpoints,
+            max_checkpoint=config.n_estimators,
+            default_points=min(25, config.n_estimators),
+        )
+        self.model = None
+        self.selected_checkpoint_: Optional[int] = None
+        self.feature_importances_: Optional[Array] = None
+        self.feature_importances_by_checkpoint_: Optional[Dict[int, Array]] = None
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    def fit(
+        self,
+        train_split: SparseRegressionSplit,
+        valid_split: SparseRegressionSplit,
+    ) -> "CTBTreeRegressorWrapper":
+        self.model = ConsensusTransportBoosting(
+            task_type="regression",
+            n_estimators=self.config.n_estimators,
+            n_inner_bootstraps=self.config.n_inner_bootstraps,
+            eta=self.config.eta,
+            instability_penalty=self.config.instability_penalty,
+            weight_power=self.config.weight_power,
+            weight_eps=self.config.weight_eps,
+            update_target_mode=self.config.update_target_mode,
+            transport_curvature_eps=self.config.transport_curvature_eps,
+            max_depth=self.config.max_depth,
+            min_samples_leaf=self.config.min_samples_leaf,
+            random_state=self.config.random_state,
+        )
+        self.model.fit(train_split.X, train_split.y)
+
+        staged_valid = self.model.decision_function_staged(valid_split.X, checkpoints=self.selection_checkpoints)
+        rows: List[Dict[str, float]] = []
+        best_checkpoint = None
+        best_valid_mse = None
+        for checkpoint in self.selection_checkpoints:
+            pred = np.asarray(staged_valid[int(checkpoint)], dtype=float)
+            mse = float(mean_squared_error(valid_split.y, pred))
+            rows.append({"checkpoint": int(checkpoint), "valid_mse": mse})
+            if best_valid_mse is None or mse < best_valid_mse:
+                best_valid_mse = mse
+                best_checkpoint = int(checkpoint)
+        self.selection_trace_ = pd.DataFrame(rows)
+        self.selected_checkpoint_ = int(best_checkpoint)
+
+        p = train_split.X.shape[1]
+        requested = set(self.selection_checkpoints)
+        importances_by_checkpoint: Dict[int, Array] = {}
+        cumulative = np.zeros(p, dtype=float)
+        learner_count = 0
+        for round_idx, round_learners in enumerate(self.model.learners_, start=1):
+            for learner in round_learners:
+                cumulative += np.asarray(learner.feature_importances_, dtype=float)
+                learner_count += 1
+            if round_idx in requested:
+                if learner_count > 0:
+                    importances_by_checkpoint[int(round_idx)] = cumulative / float(learner_count)
+                else:
+                    importances_by_checkpoint[int(round_idx)] = np.zeros(p, dtype=float)
+        self.feature_importances_by_checkpoint_ = importances_by_checkpoint
+        self.feature_importances_ = np.asarray(importances_by_checkpoint[self.selected_checkpoint_], dtype=float)
+        self.selected_support_ = np.flatnonzero(self.feature_importances_ > 0).astype(int)
+        return self
+
+    def predict(self, X: Array, checkpoint: Optional[int] = None) -> Array:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        use_checkpoint = int(checkpoint or self.selected_checkpoint_ or self.config.n_estimators)
+        staged = self.model.decision_function_staged(X, checkpoints=[use_checkpoint])
+        return np.asarray(staged[use_checkpoint], dtype=float)
+
+    def predict_staged(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
+        if self.model is None:
+            raise RuntimeError("Model has not been fit")
+        return {
+            int(k): np.asarray(v, dtype=float)
+            for k, v in self.model.decision_function_staged(X, checkpoints=checkpoints).items()
+        }
+
+    def topk_support(self, k: int) -> Array:
+        if self.feature_importances_ is None:
+            raise RuntimeError("Model has not been fit")
+        if k <= 0:
+            raise ValueError("k must be positive")
+        k = min(int(k), self.feature_importances_.shape[0])
+        order = np.argsort(-self.feature_importances_)
+        return np.sort(order[:k].astype(int))
+
+
 def build_experiment4_model(
     model_name: str,
     *,
@@ -969,6 +1097,12 @@ def build_experiment4_model(
             config=config,
             selection_checkpoints=selection_checkpoints,
             trajectory_checkpoints=trajectory_checkpoints,
+        )
+    if name == "ctb_tree":
+        config = CTBTreeConfig(random_state=random_state, **kwargs)
+        return CTBTreeRegressorWrapper(
+            config=config,
+            selection_checkpoints=selection_checkpoints,
         )
     if name == "lasso":
         config = LassoPathConfig(random_state=random_state, **kwargs)
@@ -1006,6 +1140,16 @@ def default_experiment4_model_grid(random_state: int = 0) -> Dict[str, Dict[str,
             "min_consensus_frequency": 0.25,
             "min_sign_consistency": 0.75,
             "support_frequency_threshold": 0.05,
+            "random_state": random_state,
+        },
+        "ctb_tree": {
+            "n_estimators": 300,
+            "n_inner_bootstraps": 8,
+            "eta": 1.0,
+            "max_depth": 1,
+            "min_samples_leaf": 5,
+            "update_target_mode": "legacy",
+            "transport_curvature_eps": 1e-6,
             "random_state": random_state,
         },
         "lasso": {

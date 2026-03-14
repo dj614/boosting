@@ -140,10 +140,14 @@ CTB_INSTABILITY_POWER="${CTB_INSTABILITY_POWER:-1.0}"
 CTB_MIN_CONSENSUS_FREQUENCY="${CTB_MIN_CONSENSUS_FREQUENCY:-0.25}"
 CTB_MIN_SIGN_CONSISTENCY="${CTB_MIN_SIGN_CONSISTENCY:-0.75}"
 CTB_SUPPORT_FREQUENCY_THRESHOLD="${CTB_SUPPORT_FREQUENCY_THRESHOLD:-0.05}"
+CTB_TREE_MAX_DEPTHS="${CTB_TREE_MAX_DEPTHS:-1 3}"
+CTB_TREE_MIN_SAMPLES_LEAF="${CTB_TREE_MIN_SAMPLES_LEAF:-5}"
+CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy}"
+CTB_CURVATURE_EPS="${CTB_CURVATURE_EPS:-1e-6}"
 
 run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --designs independent block_correlated strong_collinear \
-  --models l2boost bagged_componentwise ctb_sparse lasso xgb_tree \
+  --models l2boost bagged_componentwise ctb_sparse ctb_tree lasso xgb_tree \
   --num-seeds "$NUM_SEEDS" \
   --base-seed "$BASE_SEED" \
   --n-train "$N_TRAIN" \
@@ -170,6 +174,10 @@ run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --ctb-min-consensus-frequency "$CTB_MIN_CONSENSUS_FREQUENCY" \
   --ctb-min-sign-consistency "$CTB_MIN_SIGN_CONSISTENCY" \
   --ctb-support-frequency-threshold "$CTB_SUPPORT_FREQUENCY_THRESHOLD" \
+  --ctb-tree-max-depths $CTB_TREE_MAX_DEPTHS \
+  --ctb-tree-min-samples-leaf "$CTB_TREE_MIN_SAMPLES_LEAF" \
+  --ctb-target-modes $CTB_TARGET_MODES \
+  --ctb-curvature-eps $CTB_CURVATURE_EPS \
   --n-jobs "$N_JOBS" \
   --save-feature-tables \
   --outdir "$OUTDIR"

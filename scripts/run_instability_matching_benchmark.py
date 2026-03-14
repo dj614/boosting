@@ -50,6 +50,8 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
     parser.add_argument("--ctb-weight-power", type=float, default=1.0)
     parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
+    parser.add_argument("--ctb-target-modes", nargs="*", default=["legacy"])
+    parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
     parser.add_argument("--ctb-min-samples-leaf", type=int, default=5)
     parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--save-pointwise", action="store_true", help="Save pointwise mean predictions for downstream geometry plots.")
@@ -65,6 +67,53 @@ def _resolve_methods(task_type: str, requested_methods: List[str] | None, spec_k
     if not task_methods:
         raise ValueError(f"No requested methods are compatible with task_type={task_type!r}")
     return task_methods
+
+
+def _format_float_for_name(value: float) -> str:
+    return f"{float(value):g}".replace("-", "m").replace(".", "p")
+
+
+def _expand_method_specs(
+    methods: List[str],
+    *,
+    ctb_target_modes: List[str],
+    ctb_curvature_eps: List[float],
+    base_spec_kwargs: Dict[str, object],
+) -> List[Dict[str, object]]:
+    expanded: List[Dict[str, object]] = []
+    for method in methods:
+        if not str(method).startswith("ctb_"):
+            expanded.append(
+                {
+                    "method": str(method),
+                    "result_method": str(method),
+                    "spec_kwargs": dict(base_spec_kwargs),
+                }
+            )
+            continue
+        for target_mode in ctb_target_modes:
+            for curvature_eps in ctb_curvature_eps:
+                result_method = str(method)
+                if len(ctb_target_modes) > 1 or len(ctb_curvature_eps) > 1 or str(target_mode) != "legacy" or abs(float(curvature_eps) - 1e-6) > 0.0:
+                    result_method = (
+                        f"{method}__mode-{str(target_mode)}"
+                        f"__ceps-{_format_float_for_name(float(curvature_eps))}"
+                    )
+                spec_kwargs = dict(base_spec_kwargs)
+                spec_kwargs.update(
+                    {
+                        "ctb_target_mode": str(target_mode),
+                        "ctb_curvature_eps": float(curvature_eps),
+                    }
+                )
+                expanded.append(
+                    {
+                        "method": str(method),
+                        "result_method": result_method,
+                        "spec_kwargs": spec_kwargs,
+                    }
+                )
+    return expanded
 
 
 def _bootstrap_indices(n: int, rng: np.random.Generator) -> np.ndarray:
@@ -167,6 +216,7 @@ def _run_method_trial(task: Dict[str, object]) -> Dict[str, object]:
     ]
 
     method = str(task["method"])
+    result_method = str(task.get("result_method", method))
     pred_list: List[np.ndarray] = []
     for bootstrap_id, train_idx in enumerate(bootstrap_indices):
         model = build_model(
@@ -190,7 +240,7 @@ def _run_method_trial(task: Dict[str, object]) -> Dict[str, object]:
             task_type=task_type,
             scenario=scenario,
             rep=rep,
-            method=method,
+            method=result_method,
             bootstrap_reps=bootstrap_reps,
             y_true=np.asarray(split.y),
             mean_pred=mean_pred,
@@ -204,7 +254,7 @@ def _run_method_trial(task: Dict[str, object]) -> Dict[str, object]:
             task_type=task_type,
             scenario=scenario,
             rep=rep,
-            method=method,
+            method=result_method,
             split=split,
             mean_pred=mean_pred,
         )
@@ -239,6 +289,8 @@ def main() -> None:
         "ctb_instability_penalty": args.ctb_instability_penalty,
         "ctb_weight_power": args.ctb_weight_power,
         "ctb_weight_eps": args.ctb_weight_eps,
+        "ctb_target_modes": list(args.ctb_target_modes),
+        "ctb_curvature_eps": [float(x) for x in args.ctb_curvature_eps],
         "ctb_min_samples_leaf": args.ctb_min_samples_leaf,
         "save_pointwise": bool(args.save_pointwise),
     }
@@ -251,6 +303,8 @@ def main() -> None:
         "ctb_instability_penalty": float(args.ctb_instability_penalty),
         "ctb_weight_power": float(args.ctb_weight_power),
         "ctb_weight_eps": float(args.ctb_weight_eps),
+        "ctb_target_mode": str(args.ctb_target_modes[0]),
+        "ctb_curvature_eps": float(args.ctb_curvature_eps[0]),
         "ctb_min_samples_leaf": int(args.ctb_min_samples_leaf),
     }
 
@@ -261,15 +315,22 @@ def main() -> None:
     tasks: List[Dict[str, object]] = []
     for task_type in args.tasks:
         methods = _resolve_methods(task_type, args.methods, spec_kwargs)
+        method_specs = _expand_method_specs(
+            methods,
+            ctb_target_modes=[str(x) for x in args.ctb_target_modes],
+            ctb_curvature_eps=[float(x) for x in args.ctb_curvature_eps],
+            base_spec_kwargs=spec_kwargs,
+        )
         for scenario in args.scenarios:
             for rep in range(args.num_seeds):
-                for method in methods:
+                for method_spec in method_specs:
                     tasks.append(
                         {
                             "task_type": task_type,
                             "scenario": scenario,
                             "rep": rep,
-                            "method": method,
+                            "method": method_spec["method"],
+                            "result_method": method_spec["result_method"],
                             "base_seed": int(args.base_seed),
                             "bootstrap_reps": int(args.bootstrap_reps),
                             "eval_split": args.eval_split,
@@ -280,7 +341,7 @@ def main() -> None:
                             "noise_type": args.noise_type,
                             "feature_dist": args.feature_dist,
                             "noise_scale": float(args.noise_scale),
-                            "spec_kwargs": spec_kwargs,
+                            "spec_kwargs": method_spec["spec_kwargs"],
                             "save_pointwise": bool(args.save_pointwise),
                         }
                     )

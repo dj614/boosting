@@ -117,6 +117,7 @@ DATASET="${DATASET:-simulated}"          # simulated or adult
 GROUP_DEFINITION="${GROUP_DEFINITION:-sex_age}"
 N_SAMPLES="${N_SAMPLES:-12000}"
 N_FEATURES="${N_FEATURES:-8}"
+TASK_TYPE="${TASK_TYPE:-classification}"
 VALID_SIZE="${VALID_SIZE:-0.20}"
 TEST_SIZE="${TEST_SIZE:-0.20}"
 SEED_START="${SEED_START:-0}"
@@ -132,8 +133,11 @@ CTB_ETA="${CTB_ETA:-0.1}"
 CTB_INSTABILITY_PENALTY="${CTB_INSTABILITY_PENALTY:-0.2}"
 CTB_WEIGHT_POWER="${CTB_WEIGHT_POWER:-1.0}"
 CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
+CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy}"
+CTB_CURVATURE_EPS="${CTB_CURVATURE_EPS:-1e-6}"
 
 run_repo_script scripts/run_group_risk_trajectory_benchmark.py \
+  --task-type "$TASK_TYPE" \
   --dataset "$DATASET" \
   --group-definition "$GROUP_DEFINITION" \
   --n-samples "$N_SAMPLES" \
@@ -155,6 +159,8 @@ run_repo_script scripts/run_group_risk_trajectory_benchmark.py \
   --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY" \
   --ctb-weight-power "$CTB_WEIGHT_POWER" \
   --ctb-weight-eps "$CTB_WEIGHT_EPS" \
+  --ctb-target-modes $CTB_TARGET_MODES \
+  --ctb-curvature-eps $CTB_CURVATURE_EPS \
   --prediction-splits valid test \
   --trajectory-splits valid test \
   --trajectory-sample-count-per-group "$TRAJ_SAMPLES_PER_GROUP" \

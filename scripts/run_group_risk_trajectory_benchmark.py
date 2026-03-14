@@ -6,7 +6,7 @@ from concurrent.futures import as_completed
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, List, Sequence
 
 import numpy as np
 import pandas as pd
@@ -19,8 +19,6 @@ from parallel_utils import make_process_pool, resolve_n_jobs
 from progress_utils import progress_bar
 
 from sim.grouped_classification_data import (  # noqa: E402
-    BinaryClassificationDataset,
-    BinaryClassificationSplit,
     load_adult_income,
     simulate_grouped_classification,
     summarize_binary_classification_dataset,
@@ -31,7 +29,18 @@ from sim.grouped_classification_eval import (  # noqa: E402
     binary_log_loss_per_sample,
     evaluate_binary_predictions,
     make_binary_prediction_frame,
-    save_prediction_frame,
+    save_prediction_frame as save_binary_prediction_frame,
+)
+from sim.grouped_regression_data import (  # noqa: E402
+    simulate_grouped_regression,
+    summarize_grouped_regression_dataset,
+)
+from sim.grouped_regression_eval import (  # noqa: E402
+    absolute_error_per_sample,
+    evaluate_regression_predictions,
+    make_regression_prediction_frame,
+    save_prediction_frame as save_regression_prediction_frame,
+    squared_error_per_sample,
 )
 from real_data import load_real_binary_classification_dataset  # noqa: E402
 from real_data.schema import (  # noqa: E402
@@ -40,7 +49,7 @@ from real_data.schema import (  # noqa: E402
 )
 from sim.group_risk_ensemble_models import (  # noqa: E402
     EnsembleModelConfig,
-    build_binary_ensemble_wrapper,
+    build_ensemble_wrapper,
     expand_model_grid,
 )
 
@@ -48,9 +57,9 @@ from sim.group_risk_ensemble_models import (  # noqa: E402
 DEFAULT_FAMILIES = ["bagging", "rf", "gbdt", "xgb", "ctb"]
 
 
-
 def _make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run experiment 1 step-2 training loop with staged risk trajectories.")
+    parser = argparse.ArgumentParser(description="Run experiment 2 grouped-risk benchmark with staged trajectories.")
+    parser.add_argument("--task-type", choices=["classification", "regression"], default="classification")
     parser.add_argument("--dataset", choices=["simulated", "adult", "real"], default="simulated")
     parser.add_argument(
         "--group-definition",
@@ -66,10 +75,10 @@ def _make_parser() -> argparse.ArgumentParser:
             "sex_pclass",
         ],
         default="sex_age",
-        help="Only used for Adult. 'difficulty' means build adult sex_age groups first, then relabel with train-only margins.",
+        help="Only used for Adult/real classification. 'difficulty' means build adult sex_age groups first, then relabel with train-only margins.",
     )
-    parser.add_argument("--n-samples", type=int, default=12000, help="Only used for simulated data.")
-    parser.add_argument("--n-features", type=int, default=8, help="Only used for simulated data.")
+    parser.add_argument("--n-samples", type=int, default=12000, help="Used for simulated data.")
+    parser.add_argument("--n-features", type=int, default=8, help="Used for simulated data.")
     parser.add_argument("--valid-size", type=float, default=0.20)
     parser.add_argument("--test-size", type=float, default=0.20)
     parser.add_argument("--seed-start", type=int, default=0)
@@ -96,6 +105,8 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
     parser.add_argument("--ctb-weight-power", type=float, default=1.0)
     parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
+    parser.add_argument("--ctb-target-modes", nargs="*", default=["legacy"])
+    parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
     parser.add_argument("--prediction-splits", nargs="*", default=["valid", "test"])
     parser.add_argument("--trajectory-splits", nargs="*", default=["valid", "test"])
     parser.add_argument(
@@ -105,12 +116,23 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Representative trajectory samples per group and split. Set 0 to skip sample-level trajectory export.",
     )
     parser.add_argument("--n-jobs", type=int, default=1)
-    parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment1_step2"))
+    parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment2_group_risk"))
     return parser
 
 
+def _load_dataset(args: argparse.Namespace, seed: int):
+    task_type = str(args.task_type).strip().lower()
+    if task_type == "regression":
+        if args.dataset != "simulated":
+            raise ValueError("Regression task_type currently supports only --dataset simulated in experiment 2")
+        return simulate_grouped_regression(
+            n_samples=args.n_samples,
+            n_features=args.n_features,
+            valid_size=args.valid_size,
+            test_size=args.test_size,
+            random_state=seed,
+        )
 
-def _load_dataset(args: argparse.Namespace, seed: int) -> BinaryClassificationDataset:
     if args.dataset == "simulated":
         return simulate_grouped_classification(
             n_samples=args.n_samples,
@@ -119,7 +141,7 @@ def _load_dataset(args: argparse.Namespace, seed: int) -> BinaryClassificationDa
             test_size=args.test_size,
             random_state=seed,
         )
-    
+
     if args.dataset == "real":
         requested_group_definition = args.group_definition
         if requested_group_definition == "difficulty":
@@ -150,6 +172,11 @@ def _load_dataset(args: argparse.Namespace, seed: int) -> BinaryClassificationDa
     )
 
 
+def _dataset_summary(dataset, task_type: str) -> Dict[str, object]:
+    if task_type == "classification":
+        return summarize_binary_classification_dataset(dataset)
+    return summarize_grouped_regression_dataset(dataset)
+
 
 def _trajectory_checkpoints(ensemble_sizes: Sequence[int], every: int) -> List[int]:
     selected = sorted({int(x) for x in ensemble_sizes if int(x) > 0})
@@ -161,6 +188,9 @@ def _trajectory_checkpoints(ensemble_sizes: Sequence[int], every: int) -> List[i
     return sorted(set(selected))
 
 
+def _selection_metric_name(task_type: str) -> str:
+    return "overall_log_loss" if task_type == "classification" else "overall_mse"
+
 
 def _flatten_metrics(
     evaluation: Dict[str, object],
@@ -168,6 +198,7 @@ def _flatten_metrics(
     dataset_name: str,
     split: str,
     seed: int,
+    family_name: str,
     model_name: str,
     selected_checkpoint: int,
 ) -> Dict[str, object]:
@@ -175,6 +206,7 @@ def _flatten_metrics(
         "dataset_name": dataset_name,
         "split": split,
         "seed": int(seed),
+        "family_name": family_name,
         "model_name": model_name,
         "selected_checkpoint": int(selected_checkpoint),
     }
@@ -183,8 +215,7 @@ def _flatten_metrics(
     return row
 
 
-
-def _split_by_name(dataset: BinaryClassificationDataset, split_name: str) -> BinaryClassificationSplit:
+def _split_by_name(dataset, split_name: str):
     if split_name == "train":
         return dataset.train
     if split_name == "valid":
@@ -194,18 +225,16 @@ def _split_by_name(dataset: BinaryClassificationDataset, split_name: str) -> Bin
     raise ValueError(f"Unsupported split_name={split_name!r}")
 
 
-
-def _representative_sample_indices(split: BinaryClassificationSplit, count_per_group: int) -> np.ndarray:
+def _representative_sample_indices(split, count_per_group: int) -> np.ndarray:
     if count_per_group <= 0:
         return np.zeros(0, dtype=int)
-
     selected: List[int] = []
     groups = pd.unique(split.group).tolist()
     for group_name in groups:
         group_idx = np.flatnonzero(split.group == group_name)
         if group_idx.size == 0:
             continue
-        if split.difficulty_score is not None:
+        if getattr(split, "difficulty_score", None) is not None:
             order = group_idx[np.argsort(np.asarray(split.difficulty_score)[group_idx])]
             take_hard = min(group_idx.size, max(1, count_per_group // 2))
             hard_idx = order[-take_hard:]
@@ -218,24 +247,32 @@ def _representative_sample_indices(split: BinaryClassificationSplit, count_per_g
     return np.asarray(sorted(set(selected)), dtype=int)
 
 
+def _evaluate_predictions(task_type: str, *, y_true, prediction, group):
+    if task_type == "classification":
+        return evaluate_binary_predictions(y_true=y_true, y_prob=prediction, group=group)
+    return evaluate_regression_predictions(y_true=y_true, y_pred=prediction, group=group)
+
 
 def _trajectory_core_rows(
     *,
+    task_type: str,
     dataset_name: str,
     split_name: str,
     seed: int,
+    family_name: str,
     model_name: str,
     selected_checkpoint: int,
-    split: BinaryClassificationSplit,
-    staged_probs: Dict[int, np.ndarray],
+    split,
+    staged_predictions: Dict[int, np.ndarray],
 ) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
-    for checkpoint, y_prob in sorted(staged_probs.items()):
-        evaluation = evaluate_binary_predictions(y_true=split.y, y_prob=y_prob, group=split.group)
+    for checkpoint, prediction in sorted(staged_predictions.items()):
+        evaluation = _evaluate_predictions(task_type, y_true=split.y, prediction=prediction, group=split.group)
         row = {
             "dataset_name": dataset_name,
             "split": split_name,
             "seed": int(seed),
+            "family_name": family_name,
             "model_name": model_name,
             "checkpoint": int(checkpoint),
             "selected_checkpoint": int(selected_checkpoint),
@@ -247,25 +284,27 @@ def _trajectory_core_rows(
     return rows
 
 
-
 def _trajectory_group_rows(
     *,
+    task_type: str,
     dataset_name: str,
     split_name: str,
     seed: int,
+    family_name: str,
     model_name: str,
     selected_checkpoint: int,
-    split: BinaryClassificationSplit,
-    staged_probs: Dict[int, np.ndarray],
+    split,
+    staged_predictions: Dict[int, np.ndarray],
 ) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
-    for checkpoint, y_prob in sorted(staged_probs.items()):
-        evaluation = evaluate_binary_predictions(y_true=split.y, y_prob=y_prob, group=split.group)
+    for checkpoint, prediction in sorted(staged_predictions.items()):
+        evaluation = _evaluate_predictions(task_type, y_true=split.y, prediction=prediction, group=split.group)
         group_df = evaluation["group_metrics"].copy()
         group_df.insert(0, "is_selected", int(int(checkpoint) == int(selected_checkpoint)))
         group_df.insert(0, "selected_checkpoint", int(selected_checkpoint))
         group_df.insert(0, "checkpoint", int(checkpoint))
         group_df.insert(0, "model_name", model_name)
+        group_df.insert(0, "family_name", family_name)
         group_df.insert(0, "seed", int(seed))
         group_df.insert(0, "split", split_name)
         group_df.insert(0, "dataset_name", dataset_name)
@@ -273,48 +312,71 @@ def _trajectory_group_rows(
     return rows
 
 
-
 def _trajectory_sample_rows(
     *,
+    task_type: str,
     dataset_name: str,
     split_name: str,
     seed: int,
+    family_name: str,
     model_name: str,
     selected_checkpoint: int,
-    split: BinaryClassificationSplit,
-    staged_probs: Dict[int, np.ndarray],
+    split,
+    staged_predictions: Dict[int, np.ndarray],
     sample_indices: np.ndarray,
 ) -> pd.DataFrame:
     if sample_indices.size == 0:
         return pd.DataFrame()
 
     frames: List[pd.DataFrame] = []
-    for checkpoint, y_prob in sorted(staged_probs.items()):
+    for checkpoint, prediction in sorted(staged_predictions.items()):
         idx = sample_indices
-        frame = pd.DataFrame(
-            {
-                "dataset_name": dataset_name,
-                "split": split_name,
-                "seed": int(seed),
-                "model_name": model_name,
-                "checkpoint": int(checkpoint),
-                "selected_checkpoint": int(selected_checkpoint),
-                "is_selected": int(int(checkpoint) == int(selected_checkpoint)),
-                "sample_id": split.sample_id[idx],
-                "group": split.group[idx],
-                "y_true": split.y[idx],
-                "y_prob": np.asarray(y_prob)[idx],
-                "log_loss_i": binary_log_loss_per_sample(split.y[idx], np.asarray(y_prob)[idx]),
-                "brier_i": binary_brier_per_sample(split.y[idx], np.asarray(y_prob)[idx]),
-            }
-        )
-        if split.difficulty_score is not None:
-            frame["difficulty_score"] = np.asarray(split.difficulty_score)[idx]
-        if split.bayes_margin is not None:
-            frame["bayes_margin"] = np.asarray(split.bayes_margin)[idx]
+        if task_type == "classification":
+            frame = pd.DataFrame(
+                {
+                    "dataset_name": dataset_name,
+                    "split": split_name,
+                    "seed": int(seed),
+                    "family_name": family_name,
+                    "model_name": model_name,
+                    "checkpoint": int(checkpoint),
+                    "selected_checkpoint": int(selected_checkpoint),
+                    "is_selected": int(int(checkpoint) == int(selected_checkpoint)),
+                    "sample_id": split.sample_id[idx],
+                    "group": split.group[idx],
+                    "y_true": split.y[idx],
+                    "y_prob": np.asarray(prediction)[idx],
+                    "log_loss_i": binary_log_loss_per_sample(split.y[idx], np.asarray(prediction)[idx]),
+                    "brier_i": binary_brier_per_sample(split.y[idx], np.asarray(prediction)[idx]),
+                }
+            )
+            if getattr(split, "difficulty_score", None) is not None:
+                frame["difficulty_score"] = np.asarray(split.difficulty_score)[idx]
+            if getattr(split, "bayes_margin", None) is not None:
+                frame["bayes_margin"] = np.asarray(split.bayes_margin)[idx]
+        else:
+            frame = pd.DataFrame(
+                {
+                    "dataset_name": dataset_name,
+                    "split": split_name,
+                    "seed": int(seed),
+                    "family_name": family_name,
+                    "model_name": model_name,
+                    "checkpoint": int(checkpoint),
+                    "selected_checkpoint": int(selected_checkpoint),
+                    "is_selected": int(int(checkpoint) == int(selected_checkpoint)),
+                    "sample_id": split.sample_id[idx],
+                    "group": split.group[idx],
+                    "y_true": split.y[idx],
+                    "y_pred": np.asarray(prediction)[idx],
+                    "squared_error_i": squared_error_per_sample(split.y[idx], np.asarray(prediction)[idx]),
+                    "absolute_error_i": absolute_error_per_sample(split.y[idx], np.asarray(prediction)[idx]),
+                }
+            )
+            if getattr(split, "difficulty_score", None) is not None:
+                frame["difficulty_score"] = np.asarray(split.difficulty_score)[idx]
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
-
 
 
 def _write_json(path: Path, payload: Dict[str, object]) -> None:
@@ -322,14 +384,33 @@ def _write_json(path: Path, payload: Dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2, default=str))
 
 
+def _selected_valid_metric(summary_df: pd.DataFrame, task_type: str) -> pd.DataFrame:
+    if summary_df.empty:
+        return summary_df.copy()
+    valid_df = summary_df.loc[summary_df["split"].astype(str) == "valid"].copy()
+    if valid_df.empty or "family_name" not in valid_df.columns:
+        return pd.DataFrame(columns=summary_df.columns)
+    metric_col = _selection_metric_name(task_type)
+    idx = (
+        valid_df.groupby(["dataset_name", "seed", "family_name"], dropna=False)[metric_col]
+        .idxmin()
+        .dropna()
+        .astype(int)
+        .tolist()
+    )
+    selected_valid = valid_df.loc[idx, ["dataset_name", "seed", "family_name", "model_name"]].copy()
+    return summary_df.merge(selected_valid, on=["dataset_name", "seed", "family_name", "model_name"], how="inner")
+
+
 def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
     seed = int(task["seed"])
+    task_type = str(task["task_type"])
     dataset = _load_dataset(argparse.Namespace(**task["dataset_args"]), seed=seed)
     model_config = EnsembleModelConfig(**task["model_config"])
     model_dir = Path(task["model_dir"])
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    wrapper = build_binary_ensemble_wrapper(
+    wrapper = build_ensemble_wrapper(
         config=model_config,
         selection_checkpoints=task["selection_checkpoints"],
         trajectory_checkpoints=task["trajectory_checkpoints"],
@@ -343,13 +424,14 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
     group_summary_rows: List[Dict[str, object]] = []
     for split_name in task["prediction_splits"]:
         split = _split_by_name(dataset, split_name)
-        y_prob = wrapper.predict_proba(split.X)
-        evaluation = evaluate_binary_predictions(y_true=split.y, y_prob=y_prob, group=split.group)
+        prediction = wrapper.predict_proba(split.X) if task_type == "classification" else wrapper.predict(split.X)
+        evaluation = _evaluate_predictions(task_type, y_true=split.y, prediction=prediction, group=split.group)
         metrics_row = _flatten_metrics(
             evaluation,
             dataset_name=dataset.dataset_name,
             split=split_name,
             seed=seed,
+            family_name=model_config.family,
             model_name=model_config.model_name,
             selected_checkpoint=int(wrapper.selected_checkpoint_),
         )
@@ -358,69 +440,93 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
         group_df = evaluation["group_metrics"].copy()
         group_df.insert(0, "selected_checkpoint", int(wrapper.selected_checkpoint_))
         group_df.insert(0, "model_name", model_config.model_name)
+        group_df.insert(0, "family_name", model_config.family)
         group_df.insert(0, "seed", int(seed))
         group_df.insert(0, "split", split_name)
         group_df.insert(0, "dataset_name", dataset.dataset_name)
         group_summary_rows.extend(group_df.to_dict("records"))
 
-        _write_json(model_dir / f"metrics_{split_name}.json", {
-            "overall": evaluation["overall"],
-            "core_risk": evaluation["core_risk"],
-            "selected_checkpoint": int(wrapper.selected_checkpoint_),
-        })
+        _write_json(
+            model_dir / f"metrics_{split_name}.json",
+            {
+                "overall": evaluation["overall"],
+                "core_risk": evaluation["core_risk"],
+                "selected_checkpoint": int(wrapper.selected_checkpoint_),
+            },
+        )
         group_df.to_csv(model_dir / f"group_metrics_{split_name}.csv", index=False)
 
-        prediction_frame = make_binary_prediction_frame(
-            sample_id=split.sample_id,
-            dataset_name=dataset.dataset_name,
-            split=split_name,
-            seed=seed,
-            model_name=model_config.model_name,
-            group=split.group,
-            y_true=split.y,
-            y_prob=y_prob,
-            metadata=split.metadata,
-        )
-        save_prediction_frame(prediction_frame, model_dir / f"predictions_{split_name}.csv")
+        if task_type == "classification":
+            prediction_frame = make_binary_prediction_frame(
+                sample_id=split.sample_id,
+                dataset_name=dataset.dataset_name,
+                split=split_name,
+                seed=seed,
+                model_name=model_config.model_name,
+                group=split.group,
+                y_true=split.y,
+                y_prob=prediction,
+                metadata=split.metadata,
+            )
+            save_binary_prediction_frame(prediction_frame, model_dir / f"predictions_{split_name}.csv")
+        else:
+            prediction_frame = make_regression_prediction_frame(
+                sample_id=split.sample_id,
+                dataset_name=dataset.dataset_name,
+                split=split_name,
+                seed=seed,
+                model_name=model_config.model_name,
+                family_name=model_config.family,
+                group=split.group,
+                y_true=split.y,
+                y_pred=prediction,
+                metadata=split.metadata,
+            )
+            save_regression_prediction_frame(prediction_frame, model_dir / f"predictions_{split_name}.csv")
 
     core_rows: List[Dict[str, object]] = []
     group_rows: List[Dict[str, object]] = []
     sample_frames: List[pd.DataFrame] = []
     for split_name in task["trajectory_splits"]:
         split = _split_by_name(dataset, split_name)
-        staged_probs = wrapper.trajectory(split.X)
-        model_name = model_config.model_name
+        staged_predictions = wrapper.trajectory(split.X)
         core_rows.extend(
             _trajectory_core_rows(
+                task_type=task_type,
                 dataset_name=dataset.dataset_name,
                 split_name=split_name,
                 seed=seed,
-                model_name=model_name,
+                family_name=model_config.family,
+                model_name=model_config.model_name,
                 selected_checkpoint=int(wrapper.selected_checkpoint_),
                 split=split,
-                staged_probs=staged_probs,
+                staged_predictions=staged_predictions,
             )
         )
         group_rows.extend(
             _trajectory_group_rows(
+                task_type=task_type,
                 dataset_name=dataset.dataset_name,
                 split_name=split_name,
                 seed=seed,
-                model_name=model_name,
+                family_name=model_config.family,
+                model_name=model_config.model_name,
                 selected_checkpoint=int(wrapper.selected_checkpoint_),
                 split=split,
-                staged_probs=staged_probs,
+                staged_predictions=staged_predictions,
             )
         )
         sample_idx = _representative_sample_indices(split, int(task["trajectory_sample_count_per_group"]))
         sample_frame = _trajectory_sample_rows(
+            task_type=task_type,
             dataset_name=dataset.dataset_name,
             split_name=split_name,
             seed=seed,
-            model_name=model_name,
+            family_name=model_config.family,
+            model_name=model_config.model_name,
             selected_checkpoint=int(wrapper.selected_checkpoint_),
             split=split,
-            staged_probs=staged_probs,
+            staged_predictions=staged_predictions,
             sample_indices=sample_idx,
         )
         if not sample_frame.empty:
@@ -439,7 +545,6 @@ def _run_model_task(task: Dict[str, object]) -> Dict[str, object]:
     }
 
 
-
 def main() -> None:
     parser = _make_parser()
     args = parser.parse_args()
@@ -452,6 +557,7 @@ def main() -> None:
     trajectory_checkpoints = _trajectory_checkpoints(selection_checkpoints, every=args.trajectory_every)
 
     run_manifest = {
+        "task_type": args.task_type,
         "dataset": args.dataset,
         "group_definition": args.group_definition,
         "real_dataset_name": args.real_dataset_name,
@@ -475,12 +581,15 @@ def main() -> None:
         "ctb_instability_penalty": float(args.ctb_instability_penalty),
         "ctb_weight_power": float(args.ctb_weight_power),
         "ctb_weight_eps": float(args.ctb_weight_eps),
+        "ctb_target_modes": [str(x) for x in args.ctb_target_modes],
+        "ctb_curvature_eps": [float(x) for x in args.ctb_curvature_eps],
     }
     _write_json(outdir / "run_config.json", run_manifest)
 
     summary_rows: List[Dict[str, object]] = []
     group_summary_rows: List[Dict[str, object]] = []
     model_grid_template = expand_model_grid(
+        task_type=args.task_type,
         families=families,
         max_depths=args.max_depths,
         n_estimators=max(selection_checkpoints),
@@ -493,9 +602,10 @@ def main() -> None:
         instability_penalty=args.ctb_instability_penalty,
         weight_power=args.ctb_weight_power,
         weight_eps=args.ctb_weight_eps,
+        ctb_target_modes=args.ctb_target_modes,
+        ctb_curvature_eps=args.ctb_curvature_eps,
         random_state=args.seed_start,
     )
-    total_models = args.num_seeds * len(model_grid_template)
 
     if args.dataset == "real" and args.repeat_id is None:
         seed_iterable = range(args.seed_start, args.seed_start + args.num_seeds)
@@ -505,6 +615,7 @@ def main() -> None:
         seed_iterable = range(args.seed_start, args.seed_start + args.num_seeds)
 
     dataset_args = {
+        "task_type": args.task_type,
         "dataset": args.dataset,
         "group_definition": args.group_definition,
         "n_samples": int(args.n_samples),
@@ -521,8 +632,9 @@ def main() -> None:
         dataset = _load_dataset(args, seed=seed)
         seed_dir = outdir / dataset.dataset_name / f"seed_{seed:03d}"
         seed_dir.mkdir(parents=True, exist_ok=True)
-        _write_json(seed_dir / "dataset_summary.json", summarize_binary_classification_dataset(dataset))
+        _write_json(seed_dir / "dataset_summary.json", _dataset_summary(dataset, str(args.task_type)))
         model_grid = expand_model_grid(
+            task_type=args.task_type,
             families=families,
             max_depths=args.max_depths,
             n_estimators=max(selection_checkpoints),
@@ -535,12 +647,15 @@ def main() -> None:
             instability_penalty=args.ctb_instability_penalty,
             weight_power=args.ctb_weight_power,
             weight_eps=args.ctb_weight_eps,
+            ctb_target_modes=args.ctb_target_modes,
+            ctb_curvature_eps=args.ctb_curvature_eps,
             random_state=seed,
         )
         for model_config in model_grid:
             tasks.append(
                 {
                     "seed": int(seed),
+                    "task_type": str(args.task_type),
                     "dataset_args": dataset_args,
                     "model_config": model_config.to_dict(),
                     "selection_checkpoints": selection_checkpoints,
@@ -574,11 +689,24 @@ def main() -> None:
     if summary_rows:
         summary_df = pd.DataFrame(summary_rows)
         summary_df.to_csv(outdir / "metrics_summary.csv", index=False)
-        seed_grouped = summary_df.groupby(["dataset_name", "split", "model_name"], dropna=False)
+        seed_grouped = summary_df.groupby(["dataset_name", "split", "family_name", "model_name"], dropna=False)
         mean_df = seed_grouped.mean(numeric_only=True).reset_index()
         se_df = seed_grouped.sem(numeric_only=True).reset_index()
-        merged = mean_df.merge(se_df, on=["dataset_name", "split", "model_name"], suffixes=("_mean", "_se"))
+        merged = mean_df.merge(se_df, on=["dataset_name", "split", "family_name", "model_name"], suffixes=("_mean", "_se"))
         merged.to_csv(outdir / "metrics_summary_aggregated.csv", index=False)
+
+        selected_df = _selected_valid_metric(summary_df, str(args.task_type))
+        if not selected_df.empty:
+            selected_df.to_csv(outdir / "metrics_summary_family_selected.csv", index=False)
+            selected_grouped = selected_df.groupby(["dataset_name", "split", "family_name", "model_name"], dropna=False)
+            selected_mean = selected_grouped.mean(numeric_only=True).reset_index()
+            selected_se = selected_grouped.sem(numeric_only=True).reset_index()
+            selected_agg = selected_mean.merge(
+                selected_se,
+                on=["dataset_name", "split", "family_name", "model_name"],
+                suffixes=("_mean", "_se"),
+            )
+            selected_agg.to_csv(outdir / "metrics_summary_family_selected_aggregated.csv", index=False)
     if group_summary_rows:
         pd.DataFrame(group_summary_rows).to_csv(outdir / "group_metrics_summary.csv", index=False)
 

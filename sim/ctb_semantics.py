@@ -48,6 +48,7 @@ def ctb_tree_model_name(
     task_type: str = "regression",
     update_target_mode: str = "legacy",
     transport_curvature_eps: float = 1e-6,
+    weak_learner_backend: str = "sklearn_tree",
     include_task_suffix: bool = True,
 ) -> str:
     depth_i = int(depth)
@@ -55,6 +56,9 @@ def ctb_tree_model_name(
         raise ValueError("depth must be positive")
     base = f"ctb_depth{depth_i}"
     base = f"{base}__mode-{str(update_target_mode).strip()}__curv-{_format_curvature_eps(float(transport_curvature_eps))}"
+    backend = _clean_name(weak_learner_backend)
+    if backend != "sklearn_tree":
+        base = f"{base}__wl-{backend}"
     if include_task_suffix:
         base = f"{base}_{str(task_type).strip().lower()}"
     return base

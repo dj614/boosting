@@ -46,6 +46,9 @@ class TabularBenchmarkModelConfig:
     weight_eps: float = 1e-8
     ctb_target_mode: str = "legacy"
     ctb_curvature_eps: float = 1e-6
+    ctb_weak_learner_backend: str = "sklearn_tree"
+    ctb_xgb_reg_lambda: float = 1.0
+    ctb_xgb_min_child_weight: float = 1.0
     random_state: int = 0
 
     @property
@@ -57,6 +60,7 @@ class TabularBenchmarkModelConfig:
                 task_type=str(self.task_type),
                 update_target_mode=str(self.ctb_target_mode),
                 transport_curvature_eps=float(self.ctb_curvature_eps),
+                weak_learner_backend=str(self.ctb_weak_learner_backend),
                 include_task_suffix=False,
             )
         return f"{family}_depth{self.max_depth}"
@@ -301,6 +305,12 @@ class CTBBinaryTabularWrapper(BinaryTabularBenchmarkWrapper):
             transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
+            weak_learner_backend=self.config.ctb_weak_learner_backend,
+            xgb_learning_rate=self.config.learning_rate,
+            xgb_subsample=self.config.subsample,
+            xgb_colsample_bytree=self.config.colsample_bytree,
+            xgb_reg_lambda=self.config.ctb_xgb_reg_lambda,
+            xgb_min_child_weight=self.config.ctb_xgb_min_child_weight,
             random_state=self.config.random_state,
         )
 
@@ -414,6 +424,12 @@ class CTBRegressionTabularWrapper(RegressionTabularBenchmarkWrapper):
             transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
+            weak_learner_backend=self.config.ctb_weak_learner_backend,
+            xgb_learning_rate=self.config.learning_rate,
+            xgb_subsample=self.config.subsample,
+            xgb_colsample_bytree=self.config.colsample_bytree,
+            xgb_reg_lambda=self.config.ctb_xgb_reg_lambda,
+            xgb_min_child_weight=self.config.ctb_xgb_min_child_weight,
             random_state=self.config.random_state,
         )
 

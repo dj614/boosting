@@ -149,6 +149,12 @@ class CTBTreeConfig:
     weight_eps: float = 1e-8
     update_target_mode: str = "legacy"
     transport_curvature_eps: float = 1e-6
+    weak_learner_backend: str = "sklearn_tree"
+    learning_rate: float = 0.05
+    subsample: float = 0.9
+    colsample_bytree: float = 0.9
+    reg_lambda: float = 1.0
+    min_child_weight: float = 1.0
     random_state: int = 0
 
     @property
@@ -157,6 +163,7 @@ class CTBTreeConfig:
             depth=int(self.max_depth),
             update_target_mode=str(self.update_target_mode),
             transport_curvature_eps=float(self.transport_curvature_eps),
+            weak_learner_backend=str(self.weak_learner_backend),
             include_task_suffix=False,
         ).replace("ctb_depth", "ctb_tree_depth", 1)
 
@@ -1038,6 +1045,12 @@ class CTBTreeRegressorWrapper(SparseRegressionWrapperBase):
             transport_curvature_eps=self.config.transport_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
+            weak_learner_backend=self.config.weak_learner_backend,
+            xgb_learning_rate=self.config.learning_rate,
+            xgb_subsample=self.config.subsample,
+            xgb_colsample_bytree=self.config.colsample_bytree,
+            xgb_reg_lambda=self.config.reg_lambda,
+            xgb_min_child_weight=self.config.min_child_weight,
             random_state=self.config.random_state,
         )
         self.model.fit(train_split.X, train_split.y)
@@ -1386,6 +1399,12 @@ class CTBTreeClassifierWrapper(SparseClassificationWrapperBase):
             transport_curvature_eps=self.config.transport_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
+            weak_learner_backend=self.config.weak_learner_backend,
+            xgb_learning_rate=self.config.learning_rate,
+            xgb_subsample=self.config.subsample,
+            xgb_colsample_bytree=self.config.colsample_bytree,
+            xgb_reg_lambda=self.config.reg_lambda,
+            xgb_min_child_weight=self.config.min_child_weight,
             random_state=self.config.random_state,
         )
         self.model.fit(train_split.X, np.asarray(train_split.y, dtype=int))

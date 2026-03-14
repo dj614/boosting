@@ -6,17 +6,25 @@ import numpy as np
 from sklearn.base import BaseEstimator
 from sklearn.tree import DecisionTreeRegressor
 
+try:  # pragma: no cover
+    from xgboost import XGBRegressor
+except Exception:  # pragma: no cover
+    XGBRegressor = None
+
 
 TaskType = Literal["regression", "classification"]
 UpdateTargetMode = Literal["legacy", "loss_aware"]
+WeakLearnerBackend = Literal["sklearn_tree", "xgb_tree"]
 
 
 class ConsensusTransportBoosting(BaseEstimator):
     """Minimal CTB implementation for regression and binary classification.
 
-    The weak learner is always a regression tree fit to the current pseudo-response.
-    For binary classification, the ensemble state is maintained on the raw score scale
-    and probabilities are obtained via a sigmoid link.
+    The weak learner is a regressor fit to the current pseudo-response. By default
+    this is a sklearn regression tree, but an xgboost single-tree regressor can be
+    requested via ``weak_learner_backend='xgb_tree'``. For binary classification,
+    the ensemble state is maintained on the raw score scale and probabilities are
+    obtained via a sigmoid link.
     """
 
     def __init__(
@@ -34,6 +42,13 @@ class ConsensusTransportBoosting(BaseEstimator):
         denom_eps: float = 1e-12,
         max_depth: int | None = 1,
         min_samples_leaf: int = 5,
+        weak_learner_backend: WeakLearnerBackend = "sklearn_tree",
+        xgb_learning_rate: float = 0.1,
+        xgb_subsample: float = 1.0,
+        xgb_colsample_bytree: float = 0.8,
+        xgb_reg_lambda: float = 1.0,
+        xgb_min_child_weight: float = 1.0,
+        xgb_tree_method: str = "hist",
         random_state: int | None = None,
     ):
         self.task_type = task_type
@@ -48,6 +63,13 @@ class ConsensusTransportBoosting(BaseEstimator):
         self.denom_eps = float(denom_eps)
         self.max_depth = max_depth
         self.min_samples_leaf = int(min_samples_leaf)
+        self.weak_learner_backend = str(weak_learner_backend)
+        self.xgb_learning_rate = float(xgb_learning_rate)
+        self.xgb_subsample = float(xgb_subsample)
+        self.xgb_colsample_bytree = float(xgb_colsample_bytree)
+        self.xgb_reg_lambda = float(xgb_reg_lambda)
+        self.xgb_min_child_weight = float(xgb_min_child_weight)
+        self.xgb_tree_method = str(xgb_tree_method)
         self.random_state = random_state
 
     @staticmethod
@@ -85,12 +107,33 @@ class ConsensusTransportBoosting(BaseEstimator):
             return np.full_like(weights, fill_value=1.0 / float(weights.size), dtype=float)
         return weights / weight_sum
 
-    def _make_weak_learner(self, random_state: int | None) -> DecisionTreeRegressor:
-        return DecisionTreeRegressor(
-            max_depth=self.max_depth,
-            min_samples_leaf=self.min_samples_leaf,
-            random_state=random_state,
-        )
+    def _make_weak_learner(self, random_state: int | None):
+        if self.weak_learner_backend == "sklearn_tree":
+            return DecisionTreeRegressor(
+                max_depth=self.max_depth,
+                min_samples_leaf=self.min_samples_leaf,
+                random_state=random_state,
+            )
+        if self.weak_learner_backend == "xgb_tree":
+            if XGBRegressor is None:  # pragma: no cover
+                raise ImportError("xgboost is not installed, but weak_learner_backend='xgb_tree' was requested")
+            if self.max_depth is None:
+                raise ValueError("weak_learner_backend='xgb_tree' requires max_depth to be a positive integer")
+            return XGBRegressor(
+                n_estimators=1,
+                max_depth=int(self.max_depth),
+                learning_rate=self.xgb_learning_rate,
+                subsample=self.xgb_subsample,
+                colsample_bytree=self.xgb_colsample_bytree,
+                reg_lambda=self.xgb_reg_lambda,
+                min_child_weight=self.xgb_min_child_weight,
+                objective="reg:squarederror",
+                tree_method=self.xgb_tree_method,
+                random_state=random_state,
+                n_jobs=1,
+                verbosity=0,
+            )
+        raise ValueError(f"Unsupported weak_learner_backend={self.weak_learner_backend!r}")
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "ConsensusTransportBoosting":
         X = np.asarray(X, dtype=float)
@@ -103,6 +146,8 @@ class ConsensusTransportBoosting(BaseEstimator):
             raise ValueError(f"Unsupported task_type={self.task_type!r}")
         if self.update_target_mode not in {"legacy", "loss_aware"}:
             raise ValueError(f"Unsupported update_target_mode={self.update_target_mode!r}")
+        if self.weak_learner_backend not in {"sklearn_tree", "xgb_tree"}:
+            raise ValueError(f"Unsupported weak_learner_backend={self.weak_learner_backend!r}")
         if self.n_estimators <= 0:
             raise ValueError("n_estimators must be positive")
         if self.n_inner_bootstraps <= 0:
@@ -157,7 +202,7 @@ class ConsensusTransportBoosting(BaseEstimator):
         self.train_score_ = train_score
         return self
 
-    def _round_consensus_prediction(self, X: np.ndarray, round_learners: list[DecisionTreeRegressor]) -> np.ndarray:
+    def _round_consensus_prediction(self, X: np.ndarray, round_learners: list[object]) -> np.ndarray:
         return np.mean(
             [np.asarray(learner.predict(X), dtype=float).reshape(-1) for learner in round_learners],
             axis=0,

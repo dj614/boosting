@@ -17,14 +17,75 @@ UpdateTargetMode = Literal["legacy", "loss_aware"]
 WeakLearnerBackend = Literal["sklearn_tree", "xgb_tree"]
 
 
+class _SklearnXGBStyleTreeRegressor:
+    def __init__(
+        self,
+        *,
+        max_depth: int | None,
+        min_samples_leaf: int,
+        reg_lambda: float,
+        feature_indices: np.ndarray | None,
+        random_state: int | None,
+    ):
+        self.feature_indices = None if feature_indices is None else np.asarray(feature_indices, dtype=int)
+        self.reg_lambda = float(reg_lambda)
+        self.tree = DecisionTreeRegressor(
+            max_depth=max_depth,
+            min_samples_leaf=int(min_samples_leaf),
+            random_state=random_state,
+        )
+        self.leaf_ids_: np.ndarray | None = None
+        self.leaf_values_: np.ndarray | None = None
+
+    def _select_features(self, X: np.ndarray) -> np.ndarray:
+        if self.feature_indices is None:
+            return X
+        return X[:, self.feature_indices]
+
+    def fit(self, X: np.ndarray, y: np.ndarray, sample_weight: np.ndarray | None = None) -> "_SklearnXGBStyleTreeRegressor":
+        X_fit = self._select_features(np.asarray(X, dtype=float))
+        y_fit = np.asarray(y, dtype=float).reshape(-1)
+        fit_weight = None if sample_weight is None else np.asarray(sample_weight, dtype=float).reshape(-1)
+        self.tree.fit(X_fit, y_fit, sample_weight=fit_weight)
+        return self
+
+    def refit_leaf_values(
+        self,
+        X: np.ndarray,
+        *,
+        first_order: np.ndarray,
+        curvature: np.ndarray,
+        bootstrap_counts: np.ndarray,
+    ) -> None:
+        X_fit = self._select_features(np.asarray(X, dtype=float))
+        first_order_arr = np.asarray(first_order, dtype=float).reshape(-1)
+        curvature_arr = np.asarray(curvature, dtype=float).reshape(-1)
+        bootstrap_counts_arr = np.asarray(bootstrap_counts, dtype=float).reshape(-1)
+        leaf_ids = self.tree.apply(X_fit)
+        unique_leaf_ids, inverse = np.unique(leaf_ids, return_inverse=True)
+        leaf_grad_sum = np.bincount(inverse, weights=bootstrap_counts_arr * first_order_arr, minlength=unique_leaf_ids.size)
+        leaf_curv_sum = np.bincount(inverse, weights=bootstrap_counts_arr * curvature_arr, minlength=unique_leaf_ids.size)
+        self.leaf_ids_ = unique_leaf_ids.astype(np.int64, copy=False)
+        self.leaf_values_ = leaf_grad_sum / np.maximum(leaf_curv_sum + self.reg_lambda, 1e-12)
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        X_fit = self._select_features(np.asarray(X, dtype=float))
+        if self.leaf_ids_ is None or self.leaf_values_ is None:
+            return np.asarray(self.tree.predict(X_fit), dtype=float).reshape(-1)
+        leaf_ids = self.tree.apply(X_fit)
+        positions = np.searchsorted(self.leaf_ids_, leaf_ids)
+        return np.asarray(self.leaf_values_[positions], dtype=float).reshape(-1)
+
+
 class ConsensusTransportBoosting(BaseEstimator):
     """Minimal CTB implementation for regression and binary classification.
 
     The weak learner is a regressor fit to the current pseudo-response. By default
-    this is an xgboost single-tree regressor by default; a sklearn
-    regression tree can be requested via ``weak_learner_backend='sklearn_tree'``. For binary classification,
-    the ensemble state is maintained on the raw score scale and probabilities are
-    obtained via a sigmoid link.
+    this is a fast sklearn regression tree with xgboost-style leaf-value refitting;
+    an xgboost single-tree regressor can still be requested via
+    ``weak_learner_backend='xgb_tree'``. For binary classification, the ensemble
+    state is maintained on the raw score scale and probabilities are obtained via a
+    sigmoid link.
     """
 
     def __init__(
@@ -37,12 +98,12 @@ class ConsensusTransportBoosting(BaseEstimator):
         instability_penalty: float = 0.0,
         weight_power: float = 1.0,
         weight_eps: float = 1e-8,
-        update_target_mode: UpdateTargetMode = "legacy",
+        update_target_mode: UpdateTargetMode = "loss_aware",
         transport_curvature_eps: float = 1e-6,
         denom_eps: float = 1e-12,
         max_depth: int | None = 1,
         min_samples_leaf: int = 5,
-        weak_learner_backend: WeakLearnerBackend = "xgb_tree",
+        weak_learner_backend: WeakLearnerBackend = "sklearn_tree",
         xgb_learning_rate: float = 0.1,
         xgb_subsample: float = 1.0,
         xgb_colsample_bytree: float = 0.8,
@@ -107,11 +168,43 @@ class ConsensusTransportBoosting(BaseEstimator):
             return np.full_like(weights, fill_value=1.0 / float(weights.size), dtype=float)
         return weights / weight_sum
 
-    def _make_weak_learner(self, random_state: int | None):
+    def _sample_feature_indices(self, rng: np.random.Generator, n_features: int) -> np.ndarray | None:
+        if self.weak_learner_backend != "sklearn_tree":
+            return None
+        colsample = float(self.xgb_colsample_bytree)
+        if colsample >= 1.0:
+            return None
+        if colsample <= 0.0:
+            raise ValueError("xgb_colsample_bytree must be positive")
+        n_selected = max(1, min(n_features, int(np.ceil(colsample * n_features))))
+        return np.sort(rng.choice(n_features, size=n_selected, replace=False).astype(int, copy=False))
+
+    @staticmethod
+    def _bootstrap_counts(
+        rng: np.random.Generator,
+        *,
+        n_samples: int,
+        sampling_weights: np.ndarray,
+    ) -> np.ndarray:
+        return rng.multinomial(int(n_samples), np.asarray(sampling_weights, dtype=float)).astype(float)
+
+    @staticmethod
+    def _combine_fit_weights(
+        bootstrap_counts: np.ndarray,
+        base_sample_weight: np.ndarray | None,
+    ) -> np.ndarray:
+        counts = np.asarray(bootstrap_counts, dtype=float)
+        if base_sample_weight is None:
+            return counts
+        return counts * np.asarray(base_sample_weight, dtype=float)
+
+    def _make_weak_learner(self, random_state: int | None, feature_indices: np.ndarray | None = None):
         if self.weak_learner_backend == "sklearn_tree":
-            return DecisionTreeRegressor(
+            return _SklearnXGBStyleTreeRegressor(
                 max_depth=self.max_depth,
                 min_samples_leaf=self.min_samples_leaf,
+                reg_lambda=self.xgb_reg_lambda,
+                feature_indices=feature_indices,
                 random_state=random_state,
             )
         if self.weak_learner_backend == "xgb_tree":
@@ -169,17 +262,26 @@ class ConsensusTransportBoosting(BaseEstimator):
             first_order, curvature = self._loss_geometry(y, train_score)
             fit_target, fit_sample_weight = self._fit_target_and_weight(first_order, curvature)
             sampling_weights = self._sampling_weights(first_order)
+            leaf_curvature = fit_sample_weight if fit_sample_weight is not None else np.ones_like(first_order, dtype=float)
 
             round_learners = []
             round_predictions = np.empty((self.n_inner_bootstraps, n_samples), dtype=float)
             for bootstrap_idx in range(self.n_inner_bootstraps):
-                sample_idx = rng.choice(n_samples, size=n_samples, replace=True, p=sampling_weights)
-                learner = self._make_weak_learner(random_state=int(rng.integers(0, 2**31 - 1)))
-                learner.fit(
-                    X[sample_idx],
-                    fit_target[sample_idx],
-                    sample_weight=None if fit_sample_weight is None else fit_sample_weight[sample_idx],
+                bootstrap_counts = self._bootstrap_counts(rng, n_samples=n_samples, sampling_weights=sampling_weights)
+                fit_weight = self._combine_fit_weights(bootstrap_counts, fit_sample_weight)
+                feature_indices = self._sample_feature_indices(rng, X.shape[1])
+                learner = self._make_weak_learner(
+                    random_state=int(rng.integers(0, 2**31 - 1)),
+                    feature_indices=feature_indices,
                 )
+                learner.fit(X, fit_target, sample_weight=fit_weight)
+                if isinstance(learner, _SklearnXGBStyleTreeRegressor):
+                    learner.refit_leaf_values(
+                        X,
+                        first_order=first_order,
+                        curvature=leaf_curvature,
+                        bootstrap_counts=bootstrap_counts,
+                    )
                 round_learners.append(learner)
                 round_predictions[bootstrap_idx] = np.asarray(learner.predict(X), dtype=float).reshape(-1)
 

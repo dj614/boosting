@@ -44,9 +44,9 @@ class EnsembleModelConfig:
     instability_penalty: float = 0.0
     weight_power: float = 1.0
     weight_eps: float = 1e-8
-    ctb_target_mode: str = "legacy"
+    ctb_target_mode: str = "loss_aware"
     ctb_curvature_eps: float = 1e-6
-    ctb_weak_learner_backend: str = "xgb_tree"
+    ctb_weak_learner_backend: str = "sklearn_tree"
     ctb_xgb_reg_lambda: float = 1.0
     ctb_xgb_min_child_weight: float = 1.0
     random_state: int = 0
@@ -512,7 +512,7 @@ def expand_model_grid(
     weight_eps: float,
     random_state: int,
     task_type: str = "classification",
-    ctb_target_modes: Sequence[str] = ("legacy",),
+    ctb_target_modes: Sequence[str] = ("loss_aware",),
     ctb_curvature_eps: Sequence[float] = (1e-6,),
 ) -> List[EnsembleModelConfig]:
     grid: List[EnsembleModelConfig] = []

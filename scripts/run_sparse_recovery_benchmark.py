@@ -81,7 +81,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-support-frequency-threshold", type=float, default=0.05)
     parser.add_argument("--ctb-tree-max-depths", nargs="*", type=int, default=[1, 3])
     parser.add_argument("--ctb-tree-min-samples-leaf", type=int, default=5)
-    parser.add_argument("--ctb-target-modes", nargs="*", default=["legacy"])
+    parser.add_argument("--ctb-target-modes", nargs="*", default=["loss_aware"])
     parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
     parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--save-feature-tables", action="store_true")

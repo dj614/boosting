@@ -106,7 +106,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
     parser.add_argument("--ctb-weight-power", type=float, default=1.0)
     parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
-    parser.add_argument("--ctb-target-modes", nargs="*", default=["legacy"])
+    parser.add_argument("--ctb-target-modes", nargs="*", default=["loss_aware"])
     parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
     parser.add_argument("--prediction-splits", nargs="*", default=["valid", "test"])
     parser.add_argument("--trajectory-splits", nargs="*", default=["valid", "test"])

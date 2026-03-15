@@ -44,9 +44,9 @@ class TabularBenchmarkModelConfig:
     instability_penalty: float = 0.0
     weight_power: float = 1.0
     weight_eps: float = 1e-8
-    ctb_target_mode: str = "legacy"
+    ctb_target_mode: str = "loss_aware"
     ctb_curvature_eps: float = 1e-6
-    ctb_weak_learner_backend: str = "xgb_tree"
+    ctb_weak_learner_backend: str = "sklearn_tree"
     ctb_xgb_reg_lambda: float = 1.0
     ctb_xgb_min_child_weight: float = 1.0
     random_state: int = 0
@@ -555,8 +555,8 @@ def expand_tabular_model_grid(
     default_colsample_bytree = (0.8,)
     default_inner_bootstraps = (4, 8)
     default_etas = (0.5, 1.0)
-    default_ctb_target_modes = ("legacy",)
-    default_ctb_weak_learner_backends = ("xgb_tree",)
+    default_ctb_target_modes = ("loss_aware",)
+    default_ctb_weak_learner_backends = ("sklearn_tree",)
     default_ctb_curvature_eps = (1e-6,)
 
     def _resolve_grid_values(

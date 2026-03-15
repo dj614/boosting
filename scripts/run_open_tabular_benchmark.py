@@ -32,6 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rounds", type=int, default=300)
     parser.add_argument("--selection-checkpoints", nargs="*", type=int, default=DEFAULT_SELECTION_CHECKPOINTS)
     parser.add_argument("--max-depths", nargs="*", type=int, default=None)
+    parser.add_argument("--max-leaf-nodes", nargs="*", type=int, default=None)
     parser.add_argument("--min-samples-leafs", nargs="*", type=int, default=None)
     parser.add_argument("--learning-rates", nargs="*", type=float, default=None)
     parser.add_argument("--subsamples", nargs="*", type=float, default=None)
@@ -80,6 +81,7 @@ def main() -> None:
         max_rounds=args.max_rounds,
         selection_checkpoints=args.selection_checkpoints,
         max_depths=args.max_depths,
+        max_leaf_nodes=args.max_leaf_nodes,
         min_samples_leafs=args.min_samples_leafs,
         learning_rates=args.learning_rates,
         subsamples=args.subsamples,

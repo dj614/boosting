@@ -35,6 +35,7 @@ class TabularBenchmarkModelConfig:
     family: str
     max_depth: int
     n_estimators: int
+    max_leaf_nodes: int | None = 10
     min_samples_leaf: int = 5
     learning_rate: float = 0.1
     subsample: float = 1.0
@@ -316,6 +317,7 @@ class CTBBinaryTabularWrapper(BinaryTabularBenchmarkWrapper):
             update_target_mode=self.config.ctb_target_mode,
             transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
+            max_leaf_nodes=self.config.max_leaf_nodes,
             min_samples_leaf=self.config.min_samples_leaf,
             weak_learner_backend=self.config.ctb_weak_learner_backend,
             xgb_learning_rate=self.config.learning_rate,
@@ -435,6 +437,7 @@ class CTBRegressionTabularWrapper(RegressionTabularBenchmarkWrapper):
             update_target_mode=self.config.ctb_target_mode,
             transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
+            max_leaf_nodes=self.config.max_leaf_nodes,
             min_samples_leaf=self.config.min_samples_leaf,
             weak_learner_backend=self.config.ctb_weak_learner_backend,
             xgb_learning_rate=self.config.learning_rate,
@@ -529,6 +532,7 @@ def expand_tabular_model_grid(
     families: Sequence[str],
     n_estimators: int,
     max_depths: Sequence[int] | None = None,
+    max_leaf_nodes: Sequence[int | None] | None = None,
     min_samples_leafs: Sequence[int] | None = None,
     learning_rates: Sequence[float] | None = None,
     subsamples: Sequence[float] | None = None,
@@ -549,6 +553,7 @@ def expand_tabular_model_grid(
         raise ValueError(f"Unsupported task_type={task_type!r}")
 
     default_max_depths = (1, 3, 5)
+    default_max_leaf_nodes = (10,)
     default_min_samples_leafs = (1, 5)
     default_learning_rates = (0.03, 0.1)
     default_subsamples = (0.7, 1.0)
@@ -575,6 +580,7 @@ def expand_tabular_model_grid(
             raise ValueError(f"Unsupported family={family!r}")
         default_overrides = FAMILY_DEFAULTS[family]
         family_max_depths = _resolve_grid_values(max_depths, default_overrides, "max_depths", default_max_depths)
+        family_max_leaf_nodes = _resolve_grid_values(max_leaf_nodes, default_overrides, "max_leaf_nodes", default_max_leaf_nodes)
         family_min_samples_leafs = _resolve_grid_values(min_samples_leafs, default_overrides, "min_samples_leafs", default_min_samples_leafs)
         family_learning_rates = _resolve_grid_values(learning_rates, default_overrides, "learning_rate", default_learning_rates)
         family_subsamples = _resolve_grid_values(subsamples, default_overrides, "subsample", default_subsamples)
@@ -590,6 +596,7 @@ def expand_tabular_model_grid(
         )
         family_ctb_curvature_eps = _resolve_grid_values(ctb_curvature_eps, default_overrides, "ctb_curvature_eps", default_ctb_curvature_eps)
         if family != "ctb":
+            family_max_leaf_nodes = (family_max_leaf_nodes[0],)
             family_ctb_target_modes = (str(family_ctb_target_modes[0]),)
             family_ctb_weak_learner_backends = (str(family_ctb_weak_learner_backends[0]),)
             family_ctb_curvature_eps = (float(family_ctb_curvature_eps[0]),)
@@ -603,6 +610,7 @@ def expand_tabular_model_grid(
                             family=family,
                             max_depth=int(depth),
                             n_estimators=int(n_estimators),
+                            max_leaf_nodes=None if family_max_leaf_nodes[0] is None else int(family_max_leaf_nodes[0]),
                             min_samples_leaf=int(leaf),
                             learning_rate=float(family_learning_rates[0]),
                             subsample=float(family_subsamples[0]),
@@ -631,6 +639,7 @@ def expand_tabular_model_grid(
                                     family=family,
                                     max_depth=int(depth),
                                     n_estimators=int(n_estimators),
+                                    max_leaf_nodes=None if family_max_leaf_nodes[0] is None else int(family_max_leaf_nodes[0]),
                                     min_samples_leaf=int(family_min_samples_leafs[0]),
                                     learning_rate=float(lr),
                                     subsample=float(subsample),
@@ -652,28 +661,30 @@ def expand_tabular_model_grid(
                         for eta in family_etas:
                             for target_mode in family_ctb_target_modes:
                                 for weak_learner_backend in family_ctb_weak_learner_backends:
-                                    for curvature_eps in family_ctb_curvature_eps:
-                                        grid.append(
-                                            TabularBenchmarkModelConfig(
-                                            task_type=task_type,
-                                            family=family,
-                                            max_depth=int(depth),
-                                            n_estimators=int(n_estimators),
-                                            min_samples_leaf=int(leaf),
-                                            learning_rate=float(family_learning_rates[0]),
-                                            subsample=float(family_subsamples[0]),
-                                            colsample_bytree=float(family_colsample[0]),
-                                            inner_bootstraps=int(inner_bootstrap),
-                                            eta=float(eta),
-                                            instability_penalty=float(instability_penalty),
-                                            weight_power=float(weight_power),
-                                            weight_eps=float(weight_eps),
-                                            ctb_target_mode=str(target_mode),
-                                            ctb_curvature_eps=float(curvature_eps),
-                                            ctb_weak_learner_backend=str(weak_learner_backend),
-                                            random_state=int(random_state),
-                                        )
-                                    )
+                                    for max_leaf_node in family_max_leaf_nodes:
+                                        for curvature_eps in family_ctb_curvature_eps:
+                                            grid.append(
+                                                TabularBenchmarkModelConfig(
+                                                    task_type=task_type,
+                                                    family=family,
+                                                    max_depth=int(depth),
+                                                    n_estimators=int(n_estimators),
+                                                    max_leaf_nodes=None if max_leaf_node is None else int(max_leaf_node),
+                                                    min_samples_leaf=int(leaf),
+                                                    learning_rate=float(family_learning_rates[0]),
+                                                    subsample=float(family_subsamples[0]),
+                                                    colsample_bytree=float(family_colsample[0]),
+                                                    inner_bootstraps=int(inner_bootstrap),
+                                                    eta=float(eta),
+                                                    instability_penalty=float(instability_penalty),
+                                                    weight_power=float(weight_power),
+                                                    weight_eps=float(weight_eps),
+                                                    ctb_target_mode=str(target_mode),
+                                                    ctb_curvature_eps=float(curvature_eps),
+                                                    ctb_weak_learner_backend=str(weak_learner_backend),
+                                                    random_state=int(random_state),
+                                                )
+                                            )
             continue
 
     return grid

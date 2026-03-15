@@ -4,7 +4,7 @@ from typing import Literal
 
 import numpy as np
 from sklearn.base import BaseEstimator
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 try:  # pragma: no cover
     from xgboost import XGBRegressor
@@ -80,12 +80,12 @@ class _SklearnXGBStyleTreeRegressor:
 class ConsensusTransportBoosting(BaseEstimator):
     """Minimal CTB implementation for regression and binary classification.
 
-    The weak learner is a regressor fit to the current pseudo-response. By default
-    this is a fast sklearn regression tree with xgboost-style leaf-value refitting;
-    an xgboost single-tree regressor can still be requested via
-    ``weak_learner_backend='xgb_tree'``. For binary classification, the ensemble
-    state is maintained on the raw score scale and probabilities are obtained via a
-    sigmoid link.
+    By default the weak learner is an xgboost single-tree regressor fit to the
+    current pseudo-response. With ``weak_learner_backend='sklearn_tree'``,
+    regression uses ``DecisionTreeRegressor`` while binary classification uses
+    ``DecisionTreeClassifier`` on the pseudo-response direction with magnitude
+    encoded via sample weights. The ensemble state is maintained on the raw score
+    scale and probabilities are obtained via a sigmoid link.
     """
 
     def __init__(
@@ -102,6 +102,7 @@ class ConsensusTransportBoosting(BaseEstimator):
         transport_curvature_eps: float = 1e-6,
         denom_eps: float = 1e-12,
         max_depth: int | None = 1,
+        max_leaf_nodes: int | None = 10,
         min_samples_leaf: int = 5,
         weak_learner_backend: WeakLearnerBackend = "sklearn_tree",
         xgb_learning_rate: float = 0.1,
@@ -123,6 +124,7 @@ class ConsensusTransportBoosting(BaseEstimator):
         self.transport_curvature_eps = float(transport_curvature_eps)
         self.denom_eps = float(denom_eps)
         self.max_depth = max_depth
+        self.max_leaf_nodes = None if max_leaf_nodes is None else int(max_leaf_nodes)
         self.min_samples_leaf = int(min_samples_leaf)
         self.weak_learner_backend = str(weak_learner_backend)
         self.xgb_learning_rate = float(xgb_learning_rate)
@@ -198,14 +200,21 @@ class ConsensusTransportBoosting(BaseEstimator):
             return counts
         return counts * np.asarray(base_sample_weight, dtype=float)
 
+    def _uses_classifier_weak_learner(self) -> bool:
+        return self.task_type == "classification" and self.weak_learner_backend == "sklearn_tree"
+
     def _make_weak_learner(self, random_state: int | None, feature_indices: np.ndarray | None = None):
         if self.weak_learner_backend == "sklearn_tree":
-            return _SklearnXGBStyleTreeRegressor(
-                max_depth=self.max_depth,
-                min_samples_leaf=self.min_samples_leaf,
-                reg_lambda=self.xgb_reg_lambda,
-                feature_indices=feature_indices,
-                random_state=random_state,
+            tree_kwargs = {
+                "max_depth": self.max_depth,
+                "max_leaf_nodes": self.max_leaf_nodes,
+                "min_samples_leaf": self.min_samples_leaf,
+                "random_state": random_state,
+            }
+            if self._uses_classifier_weak_learner():
+                return DecisionTreeClassifier(**tree_kwargs)
+            return DecisionTreeRegressor(
+                **tree_kwargs,
             )
         if self.weak_learner_backend == "xgb_tree":
             if XGBRegressor is None:  # pragma: no cover
@@ -227,6 +236,31 @@ class ConsensusTransportBoosting(BaseEstimator):
                 verbosity=0,
             )
         raise ValueError(f"Unsupported weak_learner_backend={self.weak_learner_backend!r}")
+
+    def _fit_weak_learner(
+        self,
+        learner,
+        X_fit: np.ndarray,
+        fit_target: np.ndarray,
+        fit_sample_weight: np.ndarray | None,
+        first_order: np.ndarray,
+    ) -> None:
+        if self._uses_classifier_weak_learner():
+            direction_target = (np.asarray(fit_target, dtype=float) > 0.0).astype(int)
+            magnitude_weight = np.abs(np.asarray(first_order, dtype=float))
+            if fit_sample_weight is None:
+                sample_weight = magnitude_weight
+            else:
+                sample_weight = magnitude_weight * np.asarray(fit_sample_weight, dtype=float)
+            learner.fit(X_fit, direction_target, sample_weight=sample_weight)
+            return
+        learner.fit(X_fit, fit_target, sample_weight=fit_sample_weight)
+
+    def _predict_weak_learner(self, learner, X: np.ndarray) -> np.ndarray:
+        if self._uses_classifier_weak_learner():
+            positive_proba = np.asarray(learner.predict_proba(X)[:, 1], dtype=float).reshape(-1)
+            return 2.0 * positive_proba - 1.0
+        return np.asarray(learner.predict(X), dtype=float).reshape(-1)
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "ConsensusTransportBoosting":
         X = np.asarray(X, dtype=float)
@@ -267,23 +301,17 @@ class ConsensusTransportBoosting(BaseEstimator):
             round_learners = []
             round_predictions = np.empty((self.n_inner_bootstraps, n_samples), dtype=float)
             for bootstrap_idx in range(self.n_inner_bootstraps):
-                bootstrap_counts = self._bootstrap_counts(rng, n_samples=n_samples, sampling_weights=sampling_weights)
-                fit_weight = self._combine_fit_weights(bootstrap_counts, fit_sample_weight)
-                feature_indices = self._sample_feature_indices(rng, X.shape[1])
-                learner = self._make_weak_learner(
-                    random_state=int(rng.integers(0, 2**31 - 1)),
-                    feature_indices=feature_indices,
+                sample_idx = rng.choice(n_samples, size=n_samples, replace=True, p=sampling_weights)
+                learner = self._make_weak_learner(random_state=int(rng.integers(0, 2**31 - 1)))
+                self._fit_weak_learner(
+                    learner,
+                    X[sample_idx],
+                    fit_target=fit_target[sample_idx],
+                    fit_sample_weight=None if fit_sample_weight is None else fit_sample_weight[sample_idx],
+                    first_order=first_order[sample_idx],
                 )
-                learner.fit(X, fit_target, sample_weight=fit_weight)
-                if isinstance(learner, _SklearnXGBStyleTreeRegressor):
-                    learner.refit_leaf_values(
-                        X,
-                        first_order=first_order,
-                        curvature=leaf_curvature,
-                        bootstrap_counts=bootstrap_counts,
-                    )
                 round_learners.append(learner)
-                round_predictions[bootstrap_idx] = np.asarray(learner.predict(X), dtype=float).reshape(-1)
+                round_predictions[bootstrap_idx] = self._predict_weak_learner(learner, X)
 
             consensus = round_predictions.mean(axis=0)
             instability = np.mean((round_predictions - consensus[None, :]) ** 2, axis=0)
@@ -304,7 +332,7 @@ class ConsensusTransportBoosting(BaseEstimator):
 
     def _round_consensus_prediction(self, X: np.ndarray, round_learners: list[object]) -> np.ndarray:
         return np.mean(
-            [np.asarray(learner.predict(X), dtype=float).reshape(-1) for learner in round_learners],
+            [self._predict_weak_learner(learner, X) for learner in round_learners],
             axis=0,
         )
 

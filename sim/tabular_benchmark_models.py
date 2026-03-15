@@ -519,6 +519,7 @@ FAMILY_DEFAULTS = {
         "inner_bootstraps": (2,),
         "eta": (1.0,),
         "ctb_target_mode": ("loss_aware",),
+        "ctb_weak_learner_backend": ("xgb_tree",),
     },
 }
 
@@ -538,6 +539,7 @@ def expand_tabular_model_grid(
     weight_power: float = 1.0,
     weight_eps: float = 1e-8,
     ctb_target_modes: Sequence[str] | None = None,
+    ctb_weak_learner_backends: Sequence[str] | None = None,
     ctb_curvature_eps: Sequence[float] | None = None,
     random_state: int = 0,
 ) -> List[TabularBenchmarkModelConfig]:
@@ -554,6 +556,7 @@ def expand_tabular_model_grid(
     default_inner_bootstraps = (4, 8)
     default_etas = (0.5, 1.0)
     default_ctb_target_modes = ("legacy",)
+    default_ctb_weak_learner_backends = ("xgb_tree",)
     default_ctb_curvature_eps = (1e-6,)
 
     def _resolve_grid_values(
@@ -579,9 +582,16 @@ def expand_tabular_model_grid(
         family_inner_bootstraps = _resolve_grid_values(inner_bootstraps, default_overrides, "inner_bootstraps", default_inner_bootstraps)
         family_etas = _resolve_grid_values(etas, default_overrides, "eta", default_etas)
         family_ctb_target_modes = _resolve_grid_values(ctb_target_modes, default_overrides, "ctb_target_mode", default_ctb_target_modes)
+        family_ctb_weak_learner_backends = _resolve_grid_values(
+            ctb_weak_learner_backends,
+            default_overrides,
+            "ctb_weak_learner_backend",
+            default_ctb_weak_learner_backends,
+        )
         family_ctb_curvature_eps = _resolve_grid_values(ctb_curvature_eps, default_overrides, "ctb_curvature_eps", default_ctb_curvature_eps)
         if family != "ctb":
             family_ctb_target_modes = (str(family_ctb_target_modes[0]),)
+            family_ctb_weak_learner_backends = (str(family_ctb_weak_learner_backends[0]),)
             family_ctb_curvature_eps = (float(family_ctb_curvature_eps[0]),)
 
         if family in {"bagging", "rf"}:
@@ -604,6 +614,7 @@ def expand_tabular_model_grid(
                             weight_eps=float(weight_eps),
                             ctb_target_mode=str(family_ctb_target_modes[0]),
                             ctb_curvature_eps=float(family_ctb_curvature_eps[0]),
+                            ctb_weak_learner_backend=str(family_ctb_weak_learner_backends[0]),
                             random_state=int(random_state),
                         )
                     )
@@ -629,6 +640,7 @@ def expand_tabular_model_grid(
                                     instability_penalty=float(instability_penalty),
                                     weight_power=float(weight_power),
                                     weight_eps=float(weight_eps),
+                                    ctb_weak_learner_backend=str(family_ctb_weak_learner_backends[0]),
                                     random_state=int(random_state),
                                 )
                             )
@@ -639,9 +651,10 @@ def expand_tabular_model_grid(
                     for inner_bootstrap in family_inner_bootstraps:
                         for eta in family_etas:
                             for target_mode in family_ctb_target_modes:
-                                for curvature_eps in family_ctb_curvature_eps:
-                                    grid.append(
-                                        TabularBenchmarkModelConfig(
+                                for weak_learner_backend in family_ctb_weak_learner_backends:
+                                    for curvature_eps in family_ctb_curvature_eps:
+                                        grid.append(
+                                            TabularBenchmarkModelConfig(
                                             task_type=task_type,
                                             family=family,
                                             max_depth=int(depth),
@@ -657,6 +670,7 @@ def expand_tabular_model_grid(
                                             weight_eps=float(weight_eps),
                                             ctb_target_mode=str(target_mode),
                                             ctb_curvature_eps=float(curvature_eps),
+                                            ctb_weak_learner_backend=str(weak_learner_backend),
                                             random_state=int(random_state),
                                         )
                                     )

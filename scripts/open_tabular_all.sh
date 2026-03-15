@@ -1,6 +1,6 @@
 # # classification
 
-python scripts/run_open_tabular_benchmark.py --classification-datasets blood climate credit diabetes german_numer qsar raisin titanic --regression-datasets   --n-jobs 12 --outdir outputs/open_tabular_benchmark_classification_loss_report --use-report-metric-for-selection --max-rounds 300 --selection-checkpoints 100 200 300 --ctb-inner-bootstraps 2 --ctb-etas 1.0 --ctb-target-modes loss_aware
+python scripts/run_open_tabular_benchmark.py --classification-datasets blood climate credit diabetes german_numer qsar raisin titanic --regression-datasets   --n-jobs 12 --outdir outputs/open_tabular_benchmark_classification_loss_report --use-report-metric-for-selection --max-rounds 300 --selection-checkpoints 100 200 300 --ctb-inner-bootstraps 2 --ctb-etas 1.0 --ctb-target-modes loss_aware --ctb-weak-learner-backends sklearn_tree
 
 python scripts/analyze_open_tabular_benchmark.py --input-dir outputs/open_tabular_benchmark_classification_loss_report --task-types classification
 
@@ -18,7 +18,7 @@ python scripts/analyze_open_tabular_benchmark.py --input-dir outputs/open_tabula
 
 # regression
 
-python scripts/run_open_tabular_benchmark.py --classification-datasets   --regression-datasets california_housing concrete_compressive_strength superconductivity diamonds --n-jobs 12 --outdir outputs/open_tabular_benchmark_regression_loss_report --use-report-metric-for-selection --max-rounds 300 --selection-checkpoints 100 200 300 --ctb-inner-bootstraps 2 --ctb-etas 1.0 --ctb-target-modes loss_aware
+python scripts/run_open_tabular_benchmark.py --classification-datasets   --regression-datasets california_housing concrete_compressive_strength superconductivity diamonds --n-jobs 12 --outdir outputs/open_tabular_benchmark_regression_loss_report --use-report-metric-for-selection --max-rounds 300 --selection-checkpoints 100 200 300 --ctb-inner-bootstraps 2 --ctb-etas 1.0 --ctb-target-modes loss_aware --ctb-weak-learner-backends sklearn_tree
 
 python scripts/analyze_open_tabular_benchmark.py --input-dir outputs/open_tabular_benchmark_regression_loss_report  --task-types regression
 

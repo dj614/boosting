@@ -330,6 +330,7 @@ def run_open_tabular_benchmark(
     ctb_weight_power: float = 1.0,
     ctb_weight_eps: float = 1e-8,
     ctb_target_modes: Sequence[str] | None = None,
+    ctb_weak_learner_backends: Sequence[str] | None = None,
     ctb_curvature_eps: Sequence[float] | None = None,
     n_repeats: int = 5,
     base_seed: int = 0,
@@ -403,6 +404,7 @@ def run_open_tabular_benchmark(
             "ctb_weight_power": float(ctb_weight_power),
             "ctb_weight_eps": float(ctb_weight_eps),
             "ctb_target_modes": None if ctb_target_modes is None else [str(x) for x in ctb_target_modes],
+            "ctb_weak_learner_backends": None if ctb_weak_learner_backends is None else [str(x) for x in ctb_weak_learner_backends],
             "ctb_curvature_eps": None if ctb_curvature_eps is None else [float(x) for x in ctb_curvature_eps],
             "classification_raw_root": str(classification_raw_root),
             "classification_processed_root": str(classification_processed_root),
@@ -726,6 +728,7 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
                 weight_power=float(task["ctb_weight_power"]),
                 weight_eps=float(task["ctb_weight_eps"]),
                 ctb_target_modes=task["ctb_target_modes"],
+                ctb_weak_learner_backends=task["ctb_weak_learner_backends"],
                 ctb_curvature_eps=task["ctb_curvature_eps"],
                 random_state=run_seed,
             )

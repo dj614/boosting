@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -91,6 +91,7 @@ class TabularBenchmarkWrapper:
         self.model = None
         self.selected_checkpoint_: Optional[int] = None
         self.selection_trace_: Optional[pd.DataFrame] = None
+        self.selected_valid_prediction_: Optional[Array] = None
 
     @property
     def model_name(self) -> str:
@@ -112,6 +113,10 @@ class TabularBenchmarkWrapper:
                 best_metric = current_metric
                 best_checkpoint = int(checkpoint)
         self.selected_checkpoint_ = int(best_checkpoint)
+        self.selected_valid_prediction_ = np.asarray(
+            staged_valid_predictions[int(self.selected_checkpoint_)],
+            dtype=float,
+        ).copy()
         self.selection_trace_ = pd.DataFrame(rows)
         return self
 
@@ -511,8 +516,9 @@ FAMILY_DEFAULTS = {
         "learning_rate": (0.1,),
         "subsample": (1.0,),
         "colsample_bytree": (0.8,),
-        "inner_bootstraps": (2, 4),
+        "inner_bootstraps": (2,),
         "eta": (1.0,),
+        "ctb_target_mode": ("loss_aware",),
     },
 }
 
@@ -520,19 +526,19 @@ FAMILY_DEFAULTS = {
 def expand_tabular_model_grid(
     task_type: str,
     families: Sequence[str],
-    max_depths: Sequence[int],
     n_estimators: int,
-    min_samples_leafs: Sequence[int] = (1, 5),
-    learning_rates: Sequence[float] = (0.03, 0.1),
-    subsamples: Sequence[float] = (0.7, 1.0),
-    colsample_bytree: Sequence[float] = (0.8,),
-    inner_bootstraps: Sequence[int] = (4, 8),
-    etas: Sequence[float] = (0.5, 1.0),
+    max_depths: Sequence[int] | None = None,
+    min_samples_leafs: Sequence[int] | None = None,
+    learning_rates: Sequence[float] | None = None,
+    subsamples: Sequence[float] | None = None,
+    colsample_bytree: Sequence[float] | None = None,
+    inner_bootstraps: Sequence[int] | None = None,
+    etas: Sequence[float] | None = None,
     instability_penalty: float = 0.0,
     weight_power: float = 1.0,
     weight_eps: float = 1e-8,
-    ctb_target_modes: Sequence[str] = ("legacy",),
-    ctb_curvature_eps: Sequence[float] = (1e-6,),
+    ctb_target_modes: Sequence[str] | None = None,
+    ctb_curvature_eps: Sequence[float] | None = None,
     random_state: int = 0,
 ) -> List[TabularBenchmarkModelConfig]:
     grid: List[TabularBenchmarkModelConfig] = []
@@ -540,20 +546,40 @@ def expand_tabular_model_grid(
     if task_type not in {"classification", "regression"}:
         raise ValueError(f"Unsupported task_type={task_type!r}")
 
+    default_max_depths = (1, 3, 5)
+    default_min_samples_leafs = (1, 5)
+    default_learning_rates = (0.03, 0.1)
+    default_subsamples = (0.7, 1.0)
+    default_colsample_bytree = (0.8,)
+    default_inner_bootstraps = (4, 8)
+    default_etas = (0.5, 1.0)
+    default_ctb_target_modes = ("legacy",)
+    default_ctb_curvature_eps = (1e-6,)
+
+    def _resolve_grid_values(
+        explicit_values: Sequence[object] | None,
+        family_defaults: Mapping[str, Sequence[object]],
+        key: str,
+        fallback_values: Sequence[object],
+    ) -> Tuple[object, ...]:
+        if explicit_values is not None:
+            return tuple(explicit_values)
+        return tuple(family_defaults.get(key, fallback_values))
+
     for family_name in families:
         family = normalize_ctb_tree_family_name(family_name)
         if family not in FAMILY_DEFAULTS:
             raise ValueError(f"Unsupported family={family!r}")
         default_overrides = FAMILY_DEFAULTS[family]
-        family_max_depths = tuple(default_overrides.get("max_depths", max_depths))
-        family_min_samples_leafs = tuple(default_overrides.get("min_samples_leafs", min_samples_leafs))
-        family_learning_rates = tuple(default_overrides.get("learning_rate", learning_rates))
-        family_subsamples = tuple(default_overrides.get("subsample", subsamples))
-        family_colsample = tuple(default_overrides.get("colsample_bytree", colsample_bytree))
-        family_inner_bootstraps = tuple(default_overrides.get("inner_bootstraps", inner_bootstraps))
-        family_etas = tuple(default_overrides.get("eta", etas))
-        family_ctb_target_modes = tuple(default_overrides.get("ctb_target_mode", ctb_target_modes))
-        family_ctb_curvature_eps = tuple(default_overrides.get("ctb_curvature_eps", ctb_curvature_eps))
+        family_max_depths = _resolve_grid_values(max_depths, default_overrides, "max_depths", default_max_depths)
+        family_min_samples_leafs = _resolve_grid_values(min_samples_leafs, default_overrides, "min_samples_leafs", default_min_samples_leafs)
+        family_learning_rates = _resolve_grid_values(learning_rates, default_overrides, "learning_rate", default_learning_rates)
+        family_subsamples = _resolve_grid_values(subsamples, default_overrides, "subsample", default_subsamples)
+        family_colsample = _resolve_grid_values(colsample_bytree, default_overrides, "colsample_bytree", default_colsample_bytree)
+        family_inner_bootstraps = _resolve_grid_values(inner_bootstraps, default_overrides, "inner_bootstraps", default_inner_bootstraps)
+        family_etas = _resolve_grid_values(etas, default_overrides, "eta", default_etas)
+        family_ctb_target_modes = _resolve_grid_values(ctb_target_modes, default_overrides, "ctb_target_mode", default_ctb_target_modes)
+        family_ctb_curvature_eps = _resolve_grid_values(ctb_curvature_eps, default_overrides, "ctb_curvature_eps", default_ctb_curvature_eps)
         if family != "ctb":
             family_ctb_target_modes = (str(family_ctb_target_modes[0]),)
             family_ctb_curvature_eps = (float(family_ctb_curvature_eps[0]),)

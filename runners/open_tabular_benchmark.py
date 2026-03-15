@@ -55,7 +55,7 @@ from sim.tabular_benchmark_models import (
 
 
 DEFAULT_FAMILIES = ["bagging", "rf", "gbdt", "xgb", "ctb"]
-DEFAULT_SELECTION_CHECKPOINTS = [25, 50, 100, 200, 300]
+DEFAULT_SELECTION_CHECKPOINTS = [100, 200, 300]
 
 
 def _task_label(*, task_type: str, dataset_name: str, repeat_id: int) -> str:
@@ -319,18 +319,18 @@ def run_open_tabular_benchmark(
     families: Sequence[str] = DEFAULT_FAMILIES,
     max_rounds: int = 300,
     selection_checkpoints: Sequence[int] = DEFAULT_SELECTION_CHECKPOINTS,
-    max_depths: Sequence[int] = (1, 3, 5),
-    min_samples_leafs: Sequence[int] = (1, 5),
-    learning_rates: Sequence[float] = (0.03, 0.1),
-    subsamples: Sequence[float] = (0.7, 1.0),
-    colsample_bytree: Sequence[float] = (0.8,),
-    ctb_inner_bootstraps: Sequence[int] = (4, 8),
-    ctb_etas: Sequence[float] = (0.5, 1.0),
+    max_depths: Sequence[int] | None = None,
+    min_samples_leafs: Sequence[int] | None = None,
+    learning_rates: Sequence[float] | None = None,
+    subsamples: Sequence[float] | None = None,
+    colsample_bytree: Sequence[float] | None = None,
+    ctb_inner_bootstraps: Sequence[int] | None = None,
+    ctb_etas: Sequence[float] | None = None,
     ctb_instability_penalty: float = 0.0,
     ctb_weight_power: float = 1.0,
     ctb_weight_eps: float = 1e-8,
-    ctb_target_modes: Sequence[str] = ("legacy",),
-    ctb_curvature_eps: Sequence[float] = (1e-6,),
+    ctb_target_modes: Sequence[str] | None = None,
+    ctb_curvature_eps: Sequence[float] | None = None,
     n_repeats: int = 5,
     base_seed: int = 0,
     train_ratio: float = 0.8,
@@ -392,18 +392,18 @@ def run_open_tabular_benchmark(
             "families": [str(x) for x in families],
             "max_rounds": int(max_rounds),
             "selection_checkpoints": [int(x) for x in selection_checkpoints],
-            "max_depths": [int(x) for x in max_depths],
-            "min_samples_leafs": [int(x) for x in min_samples_leafs],
-            "learning_rates": [float(x) for x in learning_rates],
-            "subsamples": [float(x) for x in subsamples],
-            "colsample_bytree": [float(x) for x in colsample_bytree],
-            "ctb_inner_bootstraps": [int(x) for x in ctb_inner_bootstraps],
-            "ctb_etas": [float(x) for x in ctb_etas],
+            "max_depths": None if max_depths is None else [int(x) for x in max_depths],
+            "min_samples_leafs": None if min_samples_leafs is None else [int(x) for x in min_samples_leafs],
+            "learning_rates": None if learning_rates is None else [float(x) for x in learning_rates],
+            "subsamples": None if subsamples is None else [float(x) for x in subsamples],
+            "colsample_bytree": None if colsample_bytree is None else [float(x) for x in colsample_bytree],
+            "ctb_inner_bootstraps": None if ctb_inner_bootstraps is None else [int(x) for x in ctb_inner_bootstraps],
+            "ctb_etas": None if ctb_etas is None else [float(x) for x in ctb_etas],
             "ctb_instability_penalty": float(ctb_instability_penalty),
             "ctb_weight_power": float(ctb_weight_power),
             "ctb_weight_eps": float(ctb_weight_eps),
-            "ctb_target_modes": [str(x) for x in ctb_target_modes],
-            "ctb_curvature_eps": [float(x) for x in ctb_curvature_eps],
+            "ctb_target_modes": None if ctb_target_modes is None else [str(x) for x in ctb_target_modes],
+            "ctb_curvature_eps": None if ctb_curvature_eps is None else [float(x) for x in ctb_curvature_eps],
             "classification_raw_root": str(classification_raw_root),
             "classification_processed_root": str(classification_processed_root),
             "classification_split_root": str(classification_split_root),
@@ -790,7 +790,6 @@ def _run_family_grid_search(
     best_row: Optional[Dict[str, object]] = None
     best_config: Optional[TabularBenchmarkModelConfig] = None
     best_wrapper = None
-    best_test_pred: Optional[np.ndarray] = None
 
     desc = f"{dataset_name}/r{int(repeat_id):02d}/{family}"
     if show_progress:
@@ -812,10 +811,13 @@ def _run_family_grid_search(
                 use_report_metric_for_selection=use_report_metric_for_selection,
             )
             wrapper.fit(dataset.train, dataset.valid)
-            valid_pred = _predict_for_task(task_type=task_type, wrapper=wrapper, split=dataset.valid)
-            test_pred = _predict_for_task(task_type=task_type, wrapper=wrapper, split=dataset.test)
-            valid_metrics = _compute_task_metrics(task_type=task_type, y_true=dataset.valid.y, prediction=valid_pred)
-            test_metrics = _compute_task_metrics(task_type=task_type, y_true=dataset.test.y, prediction=test_pred)
+            if wrapper.selected_valid_prediction_ is None:
+                raise RuntimeError(f"Wrapper {wrapper.model_name!r} did not cache selected valid prediction")
+            valid_metrics = _compute_task_metrics(
+                task_type=task_type,
+                y_true=dataset.valid.y,
+                prediction=wrapper.selected_valid_prediction_,
+            )
             row = {
                 "task_type": str(task_type),
                 "dataset_name": str(dataset_name),
@@ -827,7 +829,6 @@ def _run_family_grid_search(
                 "selected_checkpoint": int(wrapper.selected_checkpoint_),
                 **config.to_dict(),
                 **{f"valid_{k}": v for k, v in valid_metrics.items()},
-                **{f"test_{k}": v for k, v in test_metrics.items()},
             }
             rows.append(row)
             if best_row is None or _selection_key(
@@ -842,7 +843,6 @@ def _run_family_grid_search(
                 best_row = row
                 best_config = config
                 best_wrapper = wrapper
-                best_test_pred = np.asarray(test_pred)
             if bar is not None:
                 bar.update(1)
             if progress_log_every > 0 and (config_idx == 1 or config_idx % progress_log_every == 0 or config_idx == len(configs)):
@@ -853,8 +853,12 @@ def _run_family_grid_search(
                     f"{_format_primary_metric(task_type=task_type, row=best_row if best_row is not None else row, use_report_metric_for_selection=use_report_metric_for_selection)}"
                 )
 
-    if best_row is None or best_config is None or best_wrapper is None or best_test_pred is None:
+    if best_row is None or best_config is None or best_wrapper is None:
         raise RuntimeError(f"No successful model fits for dataset={dataset_name!r}, repeat_id={repeat_id}, family={family!r}")
+
+    best_test_pred = _predict_for_task(task_type=task_type, wrapper=best_wrapper, split=dataset.test)
+    best_test_metrics = _compute_task_metrics(task_type=task_type, y_true=dataset.test.y, prediction=best_test_pred)
+    best_row.update({f"test_{k}": v for k, v in best_test_metrics.items()})
 
     sort_metric = _valid_primary_metric_column(
         task_type,

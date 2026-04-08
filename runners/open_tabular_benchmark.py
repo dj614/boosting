@@ -74,6 +74,58 @@ def _format_primary_metric(*, task_type: str, row: Dict[str, object], use_report
     return f"{metric_name}={float(metric_value):.6f}"
 
 
+def _merge_with_existing_rows(
+    *,
+    existing_path: Path,
+    new_rows: Sequence[Dict[str, object]],
+    dedupe_keys: Sequence[str],
+) -> pd.DataFrame:
+    frames: List[pd.DataFrame] = []
+    if existing_path.exists():
+        existing = pd.read_csv(existing_path)
+        if not existing.empty:
+            frames.append(existing)
+    new_frame = pd.DataFrame(list(new_rows))
+    if not new_frame.empty:
+        frames.append(new_frame)
+    if not frames:
+        return pd.DataFrame()
+    merged = pd.concat(frames, axis=0, ignore_index=True)
+    if dedupe_keys and not merged.empty:
+        available_keys = [str(col) for col in dedupe_keys if str(col) in merged.columns]
+        if available_keys:
+            merged = merged.drop_duplicates(subset=available_keys, keep="last")
+    return merged.reset_index(drop=True)
+
+
+def _write_classification_benchmark_tables(*, output_root: Path, summary_test_df: pd.DataFrame) -> Dict[str, str]:
+    if summary_test_df.empty or "task_type" not in summary_test_df.columns:
+        return {}
+    cls_df = summary_test_df.loc[summary_test_df["task_type"].astype(str) == "classification"].copy()
+    if cls_df.empty:
+        return {}
+
+    payload: Dict[str, str] = {}
+    for metric_name in ("test_accuracy", "test_balanced_accuracy"):
+        if metric_name not in cls_df.columns:
+            continue
+        pivot = (
+            cls_df.groupby(["family", "dataset_name"], dropna=False)[metric_name]
+            .mean()
+            .reset_index()
+            .pivot(index="family", columns="dataset_name", values=metric_name)
+            .sort_index(axis=0)
+            .sort_index(axis=1)
+        )
+        if pivot.empty:
+            continue
+        pivot.index.name = "family"
+        out_path = output_root / f"classification__{metric_name}__family_x_benchmark.csv"
+        pivot.to_csv(out_path)
+        payload[f"classification_{metric_name}_table_path"] = str(out_path)
+    return payload
+
+
 def ensure_open_tabular_data_ready(
     *,
     classification_datasets: Sequence[str],
@@ -347,6 +399,8 @@ def run_open_tabular_benchmark(
     n_jobs: int = 1,
     progress_log_every: int = 0,
     use_report_metric_for_selection: bool = False,
+    append_to_existing_output: bool = False,
+    lightweight_output: bool = False,
 ) -> Dict[str, object]:
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -415,6 +469,7 @@ def run_open_tabular_benchmark(
             "output_root": str(output_root),
             "progress_log_every": int(progress_log_every),
             "use_report_metric_for_selection": bool(use_report_metric_for_selection),
+            "lightweight_output": bool(lightweight_output),
         }
         for task_type, dataset_name, repeat_id in all_runs
     ]
@@ -448,10 +503,28 @@ def run_open_tabular_benchmark(
         summary_valid_rows.extend(result["summary_valid_rows"])
         error_rows.extend(result["error_rows"])
 
-    pd.DataFrame(summary_test_rows).to_csv(output_root / "summary_test_metrics.csv", index=False)
-    pd.DataFrame(summary_valid_rows).to_csv(output_root / "summary_valid_selection.csv", index=False)
-    if error_rows:
-        pd.DataFrame(error_rows).to_csv(output_root / "errors.csv", index=False)
+    summary_test_df = _merge_with_existing_rows(
+        existing_path=output_root / "summary_test_metrics.csv",
+        new_rows=summary_test_rows,
+        dedupe_keys=["task_type", "dataset_name", "repeat_id", "family"],
+    ) if append_to_existing_output else pd.DataFrame(summary_test_rows)
+    summary_valid_df = _merge_with_existing_rows(
+        existing_path=output_root / "summary_valid_selection.csv",
+        new_rows=summary_valid_rows,
+        dedupe_keys=["task_type", "dataset_name", "repeat_id", "family"],
+    ) if append_to_existing_output else pd.DataFrame(summary_valid_rows)
+    error_df = _merge_with_existing_rows(
+        existing_path=output_root / "errors.csv",
+        new_rows=error_rows,
+        dedupe_keys=["task_type", "dataset_name", "repeat_id", "family", "error_type", "error_message"],
+    ) if append_to_existing_output else pd.DataFrame(error_rows)
+
+    summary_test_df.to_csv(output_root / "summary_test_metrics.csv", index=False)
+    summary_valid_df.to_csv(output_root / "summary_valid_selection.csv", index=False)
+    if not error_df.empty:
+        error_df.to_csv(output_root / "errors.csv", index=False)
+
+    extra_table_paths = _write_classification_benchmark_tables(output_root=output_root, summary_test_df=summary_test_df)
 
     artifact_summary = {
         "output_root": str(output_root),
@@ -463,11 +536,16 @@ def run_open_tabular_benchmark(
         "n_repeats": int(n_repeats),
         "base_seed": int(base_seed),
         "use_report_metric_for_selection": bool(use_report_metric_for_selection),
-        "n_successful_runs": int(len(summary_test_rows)),
-        "n_errors": int(len(error_rows)),
+        "append_to_existing_output": bool(append_to_existing_output),
+        "lightweight_output": bool(lightweight_output),
+        "n_successful_runs": int(summary_test_df.shape[0]),
+        "n_errors": int(error_df.shape[0]),
         "summary_test_metrics_path": str(output_root / "summary_test_metrics.csv"),
         "summary_valid_selection_path": str(output_root / "summary_valid_selection.csv"),
+        **extra_table_paths,
     }
+    if not error_df.empty:
+        artifact_summary["errors_path"] = str(output_root / "errors.csv")
     (output_root / "artifact_summary.json").write_text(
         json.dumps(artifact_summary, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -745,6 +823,7 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
                 show_progress=False,
                 progress_log_every=progress_log_every,
                 use_report_metric_for_selection=bool(task.get("use_report_metric_for_selection", False)),
+                lightweight_output=bool(task.get("lightweight_output", False)),
             )
             summary_test_rows.append(result["test_summary_row"])
             summary_valid_rows.append(result["valid_summary_row"])
@@ -787,6 +866,7 @@ def _run_family_grid_search(
     show_progress: bool = True,
     progress_log_every: int = 0,
     use_report_metric_for_selection: bool = False,
+    lightweight_output: bool = False,
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: List[Dict[str, object]] = []
@@ -867,7 +947,7 @@ def _run_family_grid_search(
         task_type,
         use_report_metric_for_selection=use_report_metric_for_selection,
     )
-    pd.DataFrame(rows).sort_values(
+    sorted_rows = pd.DataFrame(rows).sort_values(
         by=[sort_metric, "selected_checkpoint", "max_depth", "min_samples_leaf"],
         ascending=[
             not _selection_metric_higher_is_better(
@@ -878,8 +958,10 @@ def _run_family_grid_search(
             True,
             False,
         ],
-    ).reset_index(drop=True).to_csv(output_dir / "grid_search_results.csv", index=False)
-    best_wrapper.selection_trace_.to_csv(output_dir / "valid_selection_trace.csv", index=False)
+    ).reset_index(drop=True)
+    if not lightweight_output:
+        sorted_rows.to_csv(output_dir / "grid_search_results.csv", index=False)
+        best_wrapper.selection_trace_.to_csv(output_dir / "valid_selection_trace.csv", index=False)
 
     best_payload = {
         **best_config.to_dict(),
@@ -898,10 +980,11 @@ def _run_family_grid_search(
         "test_metrics": {k.replace("test_", ""): v for k, v in best_row.items() if str(k).startswith("test_")},
     }
     (output_dir / "best_config.json").write_text(json.dumps(best_payload, indent=2, sort_keys=True), encoding="utf-8")
-    (output_dir / "test_metrics.json").write_text(
-        json.dumps(best_payload["test_metrics"], indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    if not lightweight_output:
+        (output_dir / "test_metrics.json").write_text(
+            json.dumps(best_payload["test_metrics"], indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     valid_summary_row = {
         "task_type": str(task_type),

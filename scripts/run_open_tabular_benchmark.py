@@ -68,6 +68,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Select checkpoints/configs by valid accuracy (classification) or valid mse (regression) instead of the default valid log loss / valid rmse.",
     )
+    parser.add_argument(
+        "--append-output",
+        action="store_true",
+        help="Merge this run into an existing outdir instead of overwriting summary CSVs.",
+    )
+    parser.add_argument(
+        "--lightweight-output",
+        action="store_true",
+        help="Only keep lightweight per-family artifacts under the output directory.",
+    )
     return parser.parse_args()
 
 
@@ -107,6 +117,8 @@ def main() -> None:
         n_jobs=args.n_jobs,
         progress_log_every=args.progress_log_every,
         use_report_metric_for_selection=args.use_report_metric_for_selection,
+        append_to_existing_output=args.append_output,
+        lightweight_output=args.lightweight_output,
     )
     print(f"[done] summary_test_metrics: {summary['summary_test_metrics_path']}")
     print(f"[done] summary_valid_selection: {summary['summary_valid_selection_path']}")

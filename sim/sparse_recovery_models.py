@@ -147,23 +147,16 @@ class CTBTreeConfig:
     instability_penalty: float = 0.0
     weight_power: float = 1.0
     weight_eps: float = 1e-8
-    update_target_mode: str = "legacy"
     transport_curvature_eps: float = 1e-6
-    weak_learner_backend: str = "xgb_tree"
-    learning_rate: float = 0.05
-    subsample: float = 0.9
-    colsample_bytree: float = 0.9
-    reg_lambda: float = 1.0
-    min_child_weight: float = 1.0
+    leaf_ridge: float = 1.0
     random_state: int = 0
 
     @property
     def model_name(self) -> str:
         return ctb_tree_model_name(
             depth=int(self.max_depth),
-            update_target_mode=str(self.update_target_mode),
             transport_curvature_eps=float(self.transport_curvature_eps),
-            weak_learner_backend=str(self.weak_learner_backend),
+            leaf_ridge=float(self.leaf_ridge),
             include_task_suffix=False,
         ).replace("ctb_depth", "ctb_tree_depth", 1)
 
@@ -1041,16 +1034,10 @@ class CTBTreeRegressorWrapper(SparseRegressionWrapperBase):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
-            update_target_mode=self.config.update_target_mode,
             transport_curvature_eps=self.config.transport_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
-            weak_learner_backend=self.config.weak_learner_backend,
-            xgb_learning_rate=self.config.learning_rate,
-            xgb_subsample=self.config.subsample,
-            xgb_colsample_bytree=self.config.colsample_bytree,
-            xgb_reg_lambda=self.config.reg_lambda,
-            xgb_min_child_weight=self.config.min_child_weight,
+            leaf_ridge=self.config.leaf_ridge,
             random_state=self.config.random_state,
         )
         self.model.fit(train_split.X, train_split.y)
@@ -1074,10 +1061,9 @@ class CTBTreeRegressorWrapper(SparseRegressionWrapperBase):
         importances_by_checkpoint: Dict[int, Array] = {}
         cumulative = np.zeros(p, dtype=float)
         learner_count = 0
-        for round_idx, round_learners in enumerate(self.model.learners_, start=1):
-            for learner in round_learners:
-                cumulative += np.asarray(learner.feature_importances_, dtype=float)
-                learner_count += 1
+        for round_idx, round_state in enumerate(self.model.round_states_, start=1):
+            cumulative += np.asarray(round_state["tree"].feature_importances_, dtype=float)
+            learner_count += 1
             if round_idx in requested:
                 if learner_count > 0:
                     importances_by_checkpoint[int(round_idx)] = cumulative / float(learner_count)
@@ -1395,16 +1381,10 @@ class CTBTreeClassifierWrapper(SparseClassificationWrapperBase):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
-            update_target_mode=self.config.update_target_mode,
             transport_curvature_eps=self.config.transport_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
-            weak_learner_backend=self.config.weak_learner_backend,
-            xgb_learning_rate=self.config.learning_rate,
-            xgb_subsample=self.config.subsample,
-            xgb_colsample_bytree=self.config.colsample_bytree,
-            xgb_reg_lambda=self.config.reg_lambda,
-            xgb_min_child_weight=self.config.min_child_weight,
+            leaf_ridge=self.config.leaf_ridge,
             random_state=self.config.random_state,
         )
         self.model.fit(train_split.X, np.asarray(train_split.y, dtype=int))
@@ -1428,10 +1408,9 @@ class CTBTreeClassifierWrapper(SparseClassificationWrapperBase):
         importances_by_checkpoint: Dict[int, Array] = {}
         cumulative = np.zeros(p, dtype=float)
         learner_count = 0
-        for round_idx, round_learners in enumerate(self.model.learners_, start=1):
-            for learner in round_learners:
-                cumulative += np.asarray(learner.feature_importances_, dtype=float)
-                learner_count += 1
+        for round_idx, round_state in enumerate(self.model.round_states_, start=1):
+            cumulative += np.asarray(round_state["tree"].feature_importances_, dtype=float)
+            learner_count += 1
             if round_idx in requested:
                 importances_by_checkpoint[int(round_idx)] = cumulative / float(learner_count) if learner_count > 0 else np.zeros(p, dtype=float)
         self.feature_importances_by_checkpoint_ = importances_by_checkpoint
@@ -1549,8 +1528,8 @@ def default_experiment4_model_grid(random_state: int = 0) -> Dict[str, Dict[str,
             "eta": 1.0,
             "max_depth": 1,
             "min_samples_leaf": 5,
-            "update_target_mode": "legacy",
             "transport_curvature_eps": 1e-6,
+            "leaf_ridge": 1.0,
             "random_state": random_state,
         },
         "lasso": {

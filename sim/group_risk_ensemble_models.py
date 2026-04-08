@@ -44,11 +44,8 @@ class EnsembleModelConfig:
     instability_penalty: float = 0.0
     weight_power: float = 1.0
     weight_eps: float = 1e-8
-    ctb_target_mode: str = "loss_aware"
     ctb_curvature_eps: float = 1e-6
-    ctb_weak_learner_backend: str = "sklearn_tree"
-    ctb_xgb_reg_lambda: float = 1.0
-    ctb_xgb_min_child_weight: float = 1.0
+    ctb_leaf_ridge: float = 1.0
     random_state: int = 0
 
     @property
@@ -58,9 +55,8 @@ class EnsembleModelConfig:
             return ctb_tree_model_name(
                 depth=int(self.max_depth),
                 task_type=str(self.task_type),
-                update_target_mode=str(self.ctb_target_mode),
                 transport_curvature_eps=float(self.ctb_curvature_eps),
-                weak_learner_backend=str(self.ctb_weak_learner_backend),
+                leaf_ridge=float(self.ctb_leaf_ridge),
                 include_task_suffix=True,
             )
         base = f"{family}_depth{self.max_depth}"
@@ -70,10 +66,7 @@ class EnsembleModelConfig:
 
     @property
     def family_output_name(self) -> str:
-        return ctb_family_output_name(
-            family_name=self.family,
-            weak_learner_backend=self.ctb_weak_learner_backend,
-        )
+        return ctb_family_output_name(family_name=self.family)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -371,16 +364,10 @@ class CTBBinaryWrapper(BinaryEnsembleWrapper):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
-            update_target_mode=self.config.ctb_target_mode,
             transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
-            weak_learner_backend=self.config.ctb_weak_learner_backend,
-            xgb_learning_rate=self.config.learning_rate,
-            xgb_subsample=self.config.subsample,
-            xgb_colsample_bytree=self.config.colsample_bytree,
-            xgb_reg_lambda=self.config.ctb_xgb_reg_lambda,
-            xgb_min_child_weight=self.config.ctb_xgb_min_child_weight,
+            leaf_ridge=self.config.ctb_leaf_ridge,
             random_state=self.config.random_state,
         )
 
@@ -404,16 +391,10 @@ class CTBRegressionWrapper(RegressionEnsembleWrapper):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
-            update_target_mode=self.config.ctb_target_mode,
             transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             min_samples_leaf=self.config.min_samples_leaf,
-            weak_learner_backend=self.config.ctb_weak_learner_backend,
-            xgb_learning_rate=self.config.learning_rate,
-            xgb_subsample=self.config.subsample,
-            xgb_colsample_bytree=self.config.colsample_bytree,
-            xgb_reg_lambda=self.config.ctb_xgb_reg_lambda,
-            xgb_min_child_weight=self.config.ctb_xgb_min_child_weight,
+            leaf_ridge=self.config.ctb_leaf_ridge,
             random_state=self.config.random_state,
         )
 
@@ -512,16 +493,16 @@ def expand_model_grid(
     weight_eps: float,
     random_state: int,
     task_type: str = "classification",
-    ctb_target_modes: Sequence[str] = ("loss_aware",),
     ctb_curvature_eps: Sequence[float] = (1e-6,),
+    ctb_leaf_ridges: Sequence[float] = (1.0,),
 ) -> List[EnsembleModelConfig]:
     grid: List[EnsembleModelConfig] = []
     for family in families:
         family_name = normalize_ctb_tree_family_name(family)
         if family_name == "ctb":
             for depth in max_depths:
-                for target_mode in ctb_target_modes:
-                    for curvature_eps in ctb_curvature_eps:
+                for curvature_eps in ctb_curvature_eps:
+                    for leaf_ridge in ctb_leaf_ridges:
                         grid.append(
                             EnsembleModelConfig(
                                 family=family_name,
@@ -537,8 +518,8 @@ def expand_model_grid(
                                 instability_penalty=float(instability_penalty),
                                 weight_power=float(weight_power),
                                 weight_eps=float(weight_eps),
-                                ctb_target_mode=str(target_mode),
                                 ctb_curvature_eps=float(curvature_eps),
+                                ctb_leaf_ridge=float(leaf_ridge),
                                 random_state=int(random_state),
                             )
                         )

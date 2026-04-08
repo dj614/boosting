@@ -45,11 +45,8 @@ class TabularBenchmarkModelConfig:
     instability_penalty: float = 0.0
     weight_power: float = 1.0
     weight_eps: float = 1e-8
-    ctb_target_mode: str = "loss_aware"
     ctb_curvature_eps: float = 1e-6
-    ctb_weak_learner_backend: str = "sklearn_tree"
-    ctb_xgb_reg_lambda: float = 1.0
-    ctb_xgb_min_child_weight: float = 1.0
+    ctb_leaf_ridge: float = 1.0
     random_state: int = 0
 
     @property
@@ -59,9 +56,8 @@ class TabularBenchmarkModelConfig:
             return ctb_tree_model_name(
                 depth=int(self.max_depth),
                 task_type=str(self.task_type),
-                update_target_mode=str(self.ctb_target_mode),
                 transport_curvature_eps=float(self.ctb_curvature_eps),
-                weak_learner_backend=str(self.ctb_weak_learner_backend),
+                leaf_ridge=float(self.ctb_leaf_ridge),
                 include_task_suffix=False,
             )
         return f"{family}_depth{self.max_depth}"
@@ -70,7 +66,6 @@ class TabularBenchmarkModelConfig:
     def family_output_name(self) -> str:
         return ctb_family_output_name(
             family_name=self.family,
-            weak_learner_backend=self.ctb_weak_learner_backend,
         )
 
     def to_dict(self) -> Dict[str, object]:
@@ -314,17 +309,11 @@ class CTBBinaryTabularWrapper(BinaryTabularBenchmarkWrapper):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
-            update_target_mode=self.config.ctb_target_mode,
             transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             max_leaf_nodes=self.config.max_leaf_nodes,
             min_samples_leaf=self.config.min_samples_leaf,
-            weak_learner_backend=self.config.ctb_weak_learner_backend,
-            xgb_learning_rate=self.config.learning_rate,
-            xgb_subsample=self.config.subsample,
-            xgb_colsample_bytree=self.config.colsample_bytree,
-            xgb_reg_lambda=self.config.ctb_xgb_reg_lambda,
-            xgb_min_child_weight=self.config.ctb_xgb_min_child_weight,
+            leaf_ridge=self.config.ctb_leaf_ridge,
             random_state=self.config.random_state,
         )
 
@@ -434,17 +423,11 @@ class CTBRegressionTabularWrapper(RegressionTabularBenchmarkWrapper):
             instability_penalty=self.config.instability_penalty,
             weight_power=self.config.weight_power,
             weight_eps=self.config.weight_eps,
-            update_target_mode=self.config.ctb_target_mode,
             transport_curvature_eps=self.config.ctb_curvature_eps,
             max_depth=self.config.max_depth,
             max_leaf_nodes=self.config.max_leaf_nodes,
             min_samples_leaf=self.config.min_samples_leaf,
-            weak_learner_backend=self.config.ctb_weak_learner_backend,
-            xgb_learning_rate=self.config.learning_rate,
-            xgb_subsample=self.config.subsample,
-            xgb_colsample_bytree=self.config.colsample_bytree,
-            xgb_reg_lambda=self.config.ctb_xgb_reg_lambda,
-            xgb_min_child_weight=self.config.ctb_xgb_min_child_weight,
+            leaf_ridge=self.config.ctb_leaf_ridge,
             random_state=self.config.random_state,
         )
 
@@ -521,8 +504,7 @@ FAMILY_DEFAULTS = {
         "colsample_bytree": (0.8,),
         "inner_bootstraps": (2,),
         "eta": (1.0,),
-        "ctb_target_mode": ("loss_aware",),
-        "ctb_weak_learner_backend": ("xgb_tree",),
+        "ctb_leaf_ridge": (1.0,),
     },
 }
 
@@ -542,9 +524,8 @@ def expand_tabular_model_grid(
     instability_penalty: float = 0.0,
     weight_power: float = 1.0,
     weight_eps: float = 1e-8,
-    ctb_target_modes: Sequence[str] | None = None,
-    ctb_weak_learner_backends: Sequence[str] | None = None,
     ctb_curvature_eps: Sequence[float] | None = None,
+    ctb_leaf_ridges: Sequence[float] | None = None,
     random_state: int = 0,
 ) -> List[TabularBenchmarkModelConfig]:
     grid: List[TabularBenchmarkModelConfig] = []
@@ -560,9 +541,8 @@ def expand_tabular_model_grid(
     default_colsample_bytree = (0.8,)
     default_inner_bootstraps = (4, 8)
     default_etas = (0.5, 1.0)
-    default_ctb_target_modes = ("loss_aware",)
-    default_ctb_weak_learner_backends = ("sklearn_tree",)
     default_ctb_curvature_eps = (1e-6,)
+    default_ctb_leaf_ridges = (1.0,)
 
     def _resolve_grid_values(
         explicit_values: Sequence[object] | None,
@@ -587,19 +567,12 @@ def expand_tabular_model_grid(
         family_colsample = _resolve_grid_values(colsample_bytree, default_overrides, "colsample_bytree", default_colsample_bytree)
         family_inner_bootstraps = _resolve_grid_values(inner_bootstraps, default_overrides, "inner_bootstraps", default_inner_bootstraps)
         family_etas = _resolve_grid_values(etas, default_overrides, "eta", default_etas)
-        family_ctb_target_modes = _resolve_grid_values(ctb_target_modes, default_overrides, "ctb_target_mode", default_ctb_target_modes)
-        family_ctb_weak_learner_backends = _resolve_grid_values(
-            ctb_weak_learner_backends,
-            default_overrides,
-            "ctb_weak_learner_backend",
-            default_ctb_weak_learner_backends,
-        )
         family_ctb_curvature_eps = _resolve_grid_values(ctb_curvature_eps, default_overrides, "ctb_curvature_eps", default_ctb_curvature_eps)
+        family_ctb_leaf_ridges = _resolve_grid_values(ctb_leaf_ridges, default_overrides, "ctb_leaf_ridge", default_ctb_leaf_ridges)
         if family != "ctb":
             family_max_leaf_nodes = (family_max_leaf_nodes[0],)
-            family_ctb_target_modes = (str(family_ctb_target_modes[0]),)
-            family_ctb_weak_learner_backends = (str(family_ctb_weak_learner_backends[0]),)
             family_ctb_curvature_eps = (float(family_ctb_curvature_eps[0]),)
+            family_ctb_leaf_ridges = (float(family_ctb_leaf_ridges[0]),)
 
         if family in {"bagging", "rf"}:
             for depth in family_max_depths:
@@ -620,9 +593,8 @@ def expand_tabular_model_grid(
                             instability_penalty=float(instability_penalty),
                             weight_power=float(weight_power),
                             weight_eps=float(weight_eps),
-                            ctb_target_mode=str(family_ctb_target_modes[0]),
                             ctb_curvature_eps=float(family_ctb_curvature_eps[0]),
-                            ctb_weak_learner_backend=str(family_ctb_weak_learner_backends[0]),
+                            ctb_leaf_ridge=float(family_ctb_leaf_ridges[0]),
                             random_state=int(random_state),
                         )
                     )
@@ -649,7 +621,8 @@ def expand_tabular_model_grid(
                                     instability_penalty=float(instability_penalty),
                                     weight_power=float(weight_power),
                                     weight_eps=float(weight_eps),
-                                    ctb_weak_learner_backend=str(family_ctb_weak_learner_backends[0]),
+                                    ctb_curvature_eps=float(family_ctb_curvature_eps[0]),
+                                    ctb_leaf_ridge=float(family_ctb_leaf_ridges[0]),
                                     random_state=int(random_state),
                                 )
                             )
@@ -659,32 +632,30 @@ def expand_tabular_model_grid(
                 for leaf in family_min_samples_leafs:
                     for inner_bootstrap in family_inner_bootstraps:
                         for eta in family_etas:
-                            for target_mode in family_ctb_target_modes:
-                                for weak_learner_backend in family_ctb_weak_learner_backends:
-                                    for max_leaf_node in family_max_leaf_nodes:
-                                        for curvature_eps in family_ctb_curvature_eps:
-                                            grid.append(
-                                                TabularBenchmarkModelConfig(
-                                                    task_type=task_type,
-                                                    family=family,
-                                                    max_depth=int(depth),
-                                                    n_estimators=int(n_estimators),
-                                                    max_leaf_nodes=None if max_leaf_node is None else int(max_leaf_node),
-                                                    min_samples_leaf=int(leaf),
-                                                    learning_rate=float(family_learning_rates[0]),
-                                                    subsample=float(family_subsamples[0]),
-                                                    colsample_bytree=float(family_colsample[0]),
-                                                    inner_bootstraps=int(inner_bootstrap),
-                                                    eta=float(eta),
-                                                    instability_penalty=float(instability_penalty),
-                                                    weight_power=float(weight_power),
-                                                    weight_eps=float(weight_eps),
-                                                    ctb_target_mode=str(target_mode),
-                                                    ctb_curvature_eps=float(curvature_eps),
-                                                    ctb_weak_learner_backend=str(weak_learner_backend),
-                                                    random_state=int(random_state),
-                                                )
+                            for max_leaf_node in family_max_leaf_nodes:
+                                for curvature_eps in family_ctb_curvature_eps:
+                                    for leaf_ridge in family_ctb_leaf_ridges:
+                                        grid.append(
+                                            TabularBenchmarkModelConfig(
+                                                task_type=task_type,
+                                                family=family,
+                                                max_depth=int(depth),
+                                                n_estimators=int(n_estimators),
+                                                max_leaf_nodes=None if max_leaf_node is None else int(max_leaf_node),
+                                                min_samples_leaf=int(leaf),
+                                                learning_rate=float(family_learning_rates[0]),
+                                                subsample=float(family_subsamples[0]),
+                                                colsample_bytree=float(family_colsample[0]),
+                                                inner_bootstraps=int(inner_bootstrap),
+                                                eta=float(eta),
+                                                instability_penalty=float(instability_penalty),
+                                                weight_power=float(weight_power),
+                                                weight_eps=float(weight_eps),
+                                                ctb_curvature_eps=float(curvature_eps),
+                                                ctb_leaf_ridge=float(leaf_ridge),
+                                                random_state=int(random_state),
                                             )
+                                        )
             continue
 
     return grid

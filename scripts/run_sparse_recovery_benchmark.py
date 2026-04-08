@@ -81,8 +81,8 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-support-frequency-threshold", type=float, default=0.05)
     parser.add_argument("--ctb-tree-max-depths", nargs="*", type=int, default=[1, 3])
     parser.add_argument("--ctb-tree-min-samples-leaf", type=int, default=5)
-    parser.add_argument("--ctb-target-modes", nargs="*", default=["loss_aware"])
     parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
+    parser.add_argument("--ctb-leaf-ridges", nargs="*", type=float, default=[1.0])
     parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--save-feature-tables", action="store_true")
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment4_sparse_recovery"))
@@ -274,8 +274,8 @@ def _run_model_trial(task: Dict[str, object]) -> Dict[str, object]:
             eta=float(task["ctb_eta"]),
             max_depth=int(task["ctb_tree_max_depth"]),
             min_samples_leaf=int(task["ctb_tree_min_samples_leaf"]),
-            update_target_mode=str(task["ctb_target_mode"]),
             transport_curvature_eps=float(task["ctb_curvature_eps"]),
+            leaf_ridge=float(task["ctb_leaf_ridge"]),
             instability_penalty=0.0,
             weight_power=float(task["ctb_residual_weight_power"]),
             weight_eps=float(task["ctb_residual_weight_eps"]),
@@ -361,8 +361,8 @@ def main() -> None:
         "ctb_support_frequency_threshold": args.ctb_support_frequency_threshold,
         "ctb_tree_max_depths": [int(x) for x in args.ctb_tree_max_depths],
         "ctb_tree_min_samples_leaf": int(args.ctb_tree_min_samples_leaf),
-        "ctb_target_modes": [str(x) for x in args.ctb_target_modes],
         "ctb_curvature_eps": [float(x) for x in args.ctb_curvature_eps],
+        "ctb_leaf_ridges": [float(x) for x in args.ctb_leaf_ridges],
         "n_jobs": args.n_jobs,
         "save_feature_tables": bool(args.save_feature_tables),
     }
@@ -378,12 +378,12 @@ def main() -> None:
                 for requested_model_name in args.models:
                     if str(requested_model_name) == "ctb_tree":
                         for depth in args.ctb_tree_max_depths:
-                            for target_mode in args.ctb_target_modes:
-                                for curvature_eps in args.ctb_curvature_eps:
+                            for curvature_eps in args.ctb_curvature_eps:
+                                for leaf_ridge in args.ctb_leaf_ridges:
                                     candidate_name = ctb_tree_model_name(
                                         depth=int(depth),
-                                        update_target_mode=str(target_mode),
                                         transport_curvature_eps=float(curvature_eps),
+                                        leaf_ridge=float(leaf_ridge),
                                         include_task_suffix=False,
                                     ).replace("ctb_depth", "ctb_tree_depth", 1)
                                     tasks.append(
@@ -396,8 +396,8 @@ def main() -> None:
                                             "model_name": candidate_name,
                                             "ctb_tree_max_depth": int(depth),
                                             "ctb_tree_min_samples_leaf": int(args.ctb_tree_min_samples_leaf),
-                                            "ctb_target_mode": str(target_mode),
                                             "ctb_curvature_eps": float(curvature_eps),
+                                            "ctb_leaf_ridge": float(leaf_ridge),
                                             "base_seed": int(args.base_seed),
                                             "n_train": int(args.n_train),
                                             "n_valid": int(args.n_valid),

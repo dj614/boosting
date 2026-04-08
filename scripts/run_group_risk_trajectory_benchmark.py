@@ -106,8 +106,8 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
     parser.add_argument("--ctb-weight-power", type=float, default=1.0)
     parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
-    parser.add_argument("--ctb-target-modes", nargs="*", default=["loss_aware"])
     parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
+    parser.add_argument("--ctb-leaf-ridges", nargs="*", type=float, default=[1.0])
     parser.add_argument("--prediction-splits", nargs="*", default=["valid", "test"])
     parser.add_argument("--trajectory-splits", nargs="*", default=["valid", "test"])
     parser.add_argument(
@@ -592,8 +592,8 @@ def main() -> None:
         "ctb_instability_penalty": float(args.ctb_instability_penalty),
         "ctb_weight_power": float(args.ctb_weight_power),
         "ctb_weight_eps": float(args.ctb_weight_eps),
-        "ctb_target_modes": [str(x) for x in args.ctb_target_modes],
         "ctb_curvature_eps": [float(x) for x in args.ctb_curvature_eps],
+        "ctb_leaf_ridges": [float(x) for x in args.ctb_leaf_ridges],
     }
     _write_json(outdir / "run_config.json", run_manifest)
 
@@ -613,8 +613,8 @@ def main() -> None:
         instability_penalty=args.ctb_instability_penalty,
         weight_power=args.ctb_weight_power,
         weight_eps=args.ctb_weight_eps,
-        ctb_target_modes=args.ctb_target_modes,
         ctb_curvature_eps=args.ctb_curvature_eps,
+        ctb_leaf_ridges=args.ctb_leaf_ridges,
         random_state=args.seed_start,
     )
 
@@ -658,8 +658,8 @@ def main() -> None:
             instability_penalty=args.ctb_instability_penalty,
             weight_power=args.ctb_weight_power,
             weight_eps=args.ctb_weight_eps,
-            ctb_target_modes=args.ctb_target_modes,
             ctb_curvature_eps=args.ctb_curvature_eps,
+            ctb_leaf_ridges=args.ctb_leaf_ridges,
             random_state=seed,
         )
         for model_config in model_grid:

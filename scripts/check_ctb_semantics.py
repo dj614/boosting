@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 import numpy as np
 
 from sim.instability_matching_models import build_model
+from sim.ctb_core import ConsensusTransportBoosting
 from sim.tabular_benchmark_models import TabularBenchmarkModelConfig, build_tabular_benchmark_wrapper
 from sim.sparse_recovery_data import generate_sparse_regression_dataset
 from sim.sparse_recovery_models import build_experiment4_model
@@ -48,6 +49,54 @@ def _regression_data(seed: int) -> tuple[np.ndarray, np.ndarray]:
     X = rng.normal(size=(80, 6))
     y = 1.5 * X[:, 0] - 0.75 * X[:, 1] + 0.25 * X[:, 2] + 0.1 * rng.normal(size=X.shape[0])
     return X, y
+
+
+def _check_core_round_state(seed: int) -> dict:
+    Xr, yr = _regression_data(seed + 10)
+    model = ConsensusTransportBoosting(
+        task_type="regression",
+        n_estimators=6,
+        n_inner_bootstraps=4,
+        eta=1.0,
+        instability_penalty=0.1,
+        weight_power=1.0,
+        weight_eps=1e-8,
+        transport_curvature_eps=1e-3,
+        max_depth=2,
+        min_samples_leaf=4,
+        leaf_ridge=1.0,
+        random_state=seed,
+    )
+    model.fit(Xr, yr)
+    if len(model.round_states_) != 6 or len(model.learners_) != 6 or model.alphas_.shape[0] != 6:
+        raise AssertionError("CTB core did not retain one round state per boosting round")
+    total_leaves = 0
+    for idx, (round_state, learners) in enumerate(zip(model.round_states_, model.learners_), start=1):
+        if len(learners) != 1 or learners[0] is not round_state["tree"]:
+            raise AssertionError(f"round {idx} does not expose exactly one shared tree structure")
+        leaf_ids = np.asarray(round_state["leaf_ids"], dtype=np.int64)
+        leaf_values = np.asarray(round_state["leaf_values"], dtype=float)
+        leaf_instability = np.asarray(round_state["leaf_instability"], dtype=float)
+        leaf_mass = np.asarray(round_state["leaf_mass"], dtype=float)
+        bootstrap_leaf_values = np.asarray(round_state["bootstrap_leaf_values"], dtype=float)
+        if bootstrap_leaf_values.shape != (4, leaf_ids.shape[0]):
+            raise AssertionError(f"round {idx} bootstrap leaf tensor has wrong shape: {bootstrap_leaf_values.shape}")
+        if leaf_values.shape != leaf_instability.shape or leaf_values.shape != leaf_mass.shape:
+            raise AssertionError(f"round {idx} leaf summary vectors are misaligned")
+        if np.any(leaf_mass < 0.0) or np.any(leaf_instability < -1e-12):
+            raise AssertionError(f"round {idx} has invalid nonnegative leaf summaries")
+        if not np.allclose(leaf_values, bootstrap_leaf_values.mean(axis=0), atol=1e-10, rtol=1e-10):
+            raise AssertionError(f"round {idx} consensus leaf values do not equal bootstrap means")
+        total_leaves += int(leaf_ids.shape[0])
+    stage = model.decision_function_staged(Xr[:12], checkpoints=[2, 4, 6])
+    if sorted(stage.keys()) != [2, 4, 6]:
+        raise AssertionError("CTB core staged checkpoints mismatch")
+    return {
+        "n_rounds": int(len(model.round_states_)),
+        "total_leaves_across_rounds": int(total_leaves),
+        "max_alpha": float(np.max(model.alphas_)),
+        "min_alpha": float(np.min(model.alphas_)),
+    }
 
 
 def _check_e1_aliases(seed: int) -> dict:
@@ -95,8 +144,8 @@ def _check_e2_wrappers(seed: int) -> dict:
         n_estimators=12,
         inner_bootstraps=3,
         eta=1.0,
-        ctb_target_mode="loss_aware",
         ctb_curvature_eps=1e-3,
+        ctb_leaf_ridge=1.0,
         random_state=seed,
     )
     cls_wrapper = build_tabular_benchmark_wrapper(cls_cfg, selection_checkpoints=checkpoints)
@@ -117,8 +166,8 @@ def _check_e2_wrappers(seed: int) -> dict:
         n_estimators=12,
         inner_bootstraps=3,
         eta=1.0,
-        ctb_target_mode="loss_aware",
         ctb_curvature_eps=1e-3,
+        ctb_leaf_ridge=1.0,
         random_state=seed,
     )
     reg_wrapper = build_tabular_benchmark_wrapper(reg_cfg, selection_checkpoints=checkpoints)
@@ -199,6 +248,7 @@ def main() -> None:
 
     payload = {
         "seed": int(args.seed),
+        "core_round_state_checks": _check_core_round_state(args.seed),
         "e1_alias_checks": _check_e1_aliases(args.seed),
         "e2_wrapper_checks": _check_e2_wrappers(args.seed),
         "e4_support_checks": _check_e4_support_semantics(args.seed),

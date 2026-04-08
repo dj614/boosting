@@ -8,8 +8,6 @@ from sklearn.tree import DecisionTreeRegressor
 
 
 TaskType = Literal["regression", "classification"]
-UpdateTargetMode = Literal["legacy", "loss_aware"]
-WeakLearnerBackend = Literal["sklearn_tree", "xgb_tree"]
 
 
 class ConsensusTransportBoosting(BaseEstimator):
@@ -31,20 +29,12 @@ class ConsensusTransportBoosting(BaseEstimator):
         instability_penalty: float = 0.0,
         weight_power: float = 1.0,
         weight_eps: float = 1e-8,
-        update_target_mode: UpdateTargetMode = "loss_aware",
         transport_curvature_eps: float = 1e-6,
         denom_eps: float = 1e-12,
         max_depth: int | None = 1,
         max_leaf_nodes: int | None = 10,
         min_samples_leaf: int = 5,
-        weak_learner_backend: WeakLearnerBackend = "sklearn_tree",
-        leaf_ridge: float | None = None,
-        xgb_learning_rate: float = 0.1,
-        xgb_subsample: float = 1.0,
-        xgb_colsample_bytree: float = 0.8,
-        xgb_reg_lambda: float = 1.0,
-        xgb_min_child_weight: float = 1.0,
-        xgb_tree_method: str = "hist",
+        leaf_ridge: float = 1.0,
         random_state: int | None = None,
     ):
         self.task_type = task_type
@@ -54,21 +44,12 @@ class ConsensusTransportBoosting(BaseEstimator):
         self.instability_penalty = float(instability_penalty)
         self.weight_power = float(weight_power)
         self.weight_eps = float(weight_eps)
-        self.update_target_mode = str(update_target_mode)
         self.transport_curvature_eps = float(transport_curvature_eps)
         self.denom_eps = float(denom_eps)
         self.max_depth = max_depth
         self.max_leaf_nodes = None if max_leaf_nodes is None else int(max_leaf_nodes)
         self.min_samples_leaf = int(min_samples_leaf)
-        self.weak_learner_backend = str(weak_learner_backend)
-        self.leaf_ridge = float(xgb_reg_lambda if leaf_ridge is None else leaf_ridge)
-        # Kept for step-1 backward compatibility with existing wrappers/configs.
-        self.xgb_learning_rate = float(xgb_learning_rate)
-        self.xgb_subsample = float(xgb_subsample)
-        self.xgb_colsample_bytree = float(xgb_colsample_bytree)
-        self.xgb_reg_lambda = float(xgb_reg_lambda)
-        self.xgb_min_child_weight = float(xgb_min_child_weight)
-        self.xgb_tree_method = str(xgb_tree_method)
+        self.leaf_ridge = float(leaf_ridge)
         self.random_state = random_state
 
     @staticmethod
@@ -109,7 +90,51 @@ class ConsensusTransportBoosting(BaseEstimator):
     @staticmethod
     def _leaf_lookup(unique_leaf_ids: np.ndarray, applied_leaf_ids: np.ndarray) -> np.ndarray:
         positions = np.searchsorted(unique_leaf_ids, applied_leaf_ids)
+        if np.any(positions < 0) or np.any(positions >= unique_leaf_ids.shape[0]):
+            raise RuntimeError("Encountered leaf ids outside the learned CTB partition")
+        if not np.array_equal(unique_leaf_ids[positions], applied_leaf_ids):
+            raise RuntimeError("Encountered unknown leaf ids while mapping CTB leaf values")
         return np.asarray(positions, dtype=int)
+
+    def _validate_round_state(self, round_state: dict[str, Any], *, expected_bootstraps: int) -> None:
+        required_keys = {
+            "tree",
+            "leaf_ids",
+            "leaf_values",
+            "leaf_instability",
+            "leaf_mass",
+            "bootstrap_leaf_values",
+        }
+        missing = required_keys.difference(round_state)
+        if missing:
+            raise RuntimeError(f"Malformed CTB round state; missing keys: {sorted(missing)}")
+        leaf_ids = np.asarray(round_state["leaf_ids"], dtype=np.int64).reshape(-1)
+        leaf_values = np.asarray(round_state["leaf_values"], dtype=float).reshape(-1)
+        leaf_instability = np.asarray(round_state["leaf_instability"], dtype=float).reshape(-1)
+        leaf_mass = np.asarray(round_state["leaf_mass"], dtype=float).reshape(-1)
+        bootstrap_leaf_values = np.asarray(round_state["bootstrap_leaf_values"], dtype=float)
+        n_leaves = int(leaf_ids.shape[0])
+        if n_leaves <= 0:
+            raise RuntimeError("CTB round state must contain at least one leaf")
+        if leaf_values.shape[0] != n_leaves or leaf_instability.shape[0] != n_leaves or leaf_mass.shape[0] != n_leaves:
+            raise RuntimeError("CTB leaf summaries must align with the learned partition")
+        if bootstrap_leaf_values.shape != (expected_bootstraps, n_leaves):
+            raise RuntimeError(
+                "Bootstrap leaf values must have shape (n_inner_bootstraps, n_leaves); "
+                f"got {bootstrap_leaf_values.shape}"
+            )
+        if not np.array_equal(np.sort(leaf_ids), leaf_ids):
+            raise RuntimeError("CTB leaf ids must be stored in sorted order")
+        if np.any(leaf_mass < 0.0):
+            raise RuntimeError("CTB leaf masses must be non-negative")
+        if np.any(leaf_instability < -1e-12):
+            raise RuntimeError("CTB leaf instability must be non-negative")
+        bootstrap_mean = np.mean(bootstrap_leaf_values, axis=0)
+        bootstrap_var = np.mean((bootstrap_leaf_values - bootstrap_mean[None, :]) ** 2, axis=0)
+        if not np.allclose(leaf_values, bootstrap_mean, atol=1e-10, rtol=1e-10):
+            raise RuntimeError("Stored CTB consensus leaf values do not match bootstrap means")
+        if not np.allclose(leaf_instability, bootstrap_var, atol=1e-10, rtol=1e-10):
+            raise RuntimeError("Stored CTB leaf instability does not match bootstrap variance")
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "ConsensusTransportBoosting":
         X = np.asarray(X, dtype=float)
@@ -120,26 +145,24 @@ class ConsensusTransportBoosting(BaseEstimator):
             raise ValueError(f"Mismatched X/y with shapes {X.shape} and {y.shape}")
         if self.task_type not in {"regression", "classification"}:
             raise ValueError(f"Unsupported task_type={self.task_type!r}")
-        if self.update_target_mode != "loss_aware":
-            raise ValueError(
-                "Step-1 CTB core only supports update_target_mode='loss_aware'; "
-                f"got {self.update_target_mode!r}"
-            )
-        if self.weak_learner_backend != "sklearn_tree":
-            raise ValueError(
-                "Step-1 CTB core only supports weak_learner_backend='sklearn_tree'; "
-                f"got {self.weak_learner_backend!r}"
-            )
         if self.n_estimators <= 0:
             raise ValueError("n_estimators must be positive")
         if self.n_inner_bootstraps <= 0:
             raise ValueError("n_inner_bootstraps must be positive")
         if self.eta <= 0.0:
             raise ValueError("eta must be positive")
+        if self.instability_penalty < 0.0:
+            raise ValueError("instability_penalty must be non-negative")
+        if self.weight_power < 0.0:
+            raise ValueError("weight_power must be non-negative")
         if self.transport_curvature_eps < 0.0:
             raise ValueError("transport_curvature_eps must be non-negative")
         if self.weight_eps < 0.0:
             raise ValueError("weight_eps must be non-negative")
+        if self.min_samples_leaf <= 0:
+            raise ValueError("min_samples_leaf must be positive")
+        if self.max_leaf_nodes is not None and self.max_leaf_nodes <= 1:
+            raise ValueError("max_leaf_nodes must be greater than 1 when specified")
         if self.leaf_ridge < 0.0:
             raise ValueError("leaf_ridge must be non-negative")
 
@@ -189,15 +212,16 @@ class ConsensusTransportBoosting(BaseEstimator):
 
             train_score = train_score + alpha * consensus
             self.learners_.append([tree])
-            self.round_states_.append(
-                {
-                    "tree": tree,
-                    "leaf_ids": unique_leaf_ids,
-                    "leaf_values": consensus_leaf_values,
-                    "leaf_instability": leaf_instability,
-                    "leaf_mass": leaf_mass,
-                }
-            )
+            round_state = {
+                "tree": tree,
+                "leaf_ids": unique_leaf_ids,
+                "leaf_values": consensus_leaf_values,
+                "leaf_instability": leaf_instability,
+                "leaf_mass": leaf_mass,
+                "bootstrap_leaf_values": leaf_values_boot,
+            }
+            self._validate_round_state(round_state, expected_bootstraps=self.n_inner_bootstraps)
+            self.round_states_.append(round_state)
             self.alphas_.append(float(alpha))
 
         self.alphas_ = np.asarray(self.alphas_, dtype=float)

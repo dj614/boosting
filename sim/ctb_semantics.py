@@ -30,7 +30,7 @@ def is_ctb_tree_family_name(name: object) -> bool:
     return normalize_ctb_tree_family_name(name) == "ctb"
 
 
-def ctb_family_output_name(*, family_name: object, weak_learner_backend: object = "sklearn_tree") -> str:
+def ctb_family_output_name(*, family_name: object) -> str:
     family = normalize_ctb_tree_family_name(family_name)
     if family != "ctb":
         return family
@@ -53,9 +53,7 @@ def ctb_tree_model_name(
     *,
     depth: int,
     task_type: str = "regression",
-    update_target_mode: str = "loss_aware",
     transport_curvature_eps: float = 1e-6,
-    weak_learner_backend: str = "sklearn_tree",
     leaf_ridge: float = 1.0,
     include_task_suffix: bool = True,
 ) -> str:
@@ -114,9 +112,7 @@ def normalize_ctb_tree_method_name(name: object) -> str:
 def canonical_ctb_tree_result_method(
     method_name: object,
     *,
-    update_target_mode: str = "loss_aware",
     transport_curvature_eps: float = 1e-6,
-    weak_learner_backend: str = "sklearn_tree",
     leaf_ridge: float = 1.0,
 ) -> str:
     canonical = normalize_ctb_tree_method_name(method_name)

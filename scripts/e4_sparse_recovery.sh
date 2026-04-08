@@ -144,7 +144,7 @@ CTB_MIN_SIGN_CONSISTENCY="${CTB_MIN_SIGN_CONSISTENCY:-0.75}"
 CTB_SUPPORT_FREQUENCY_THRESHOLD="${CTB_SUPPORT_FREQUENCY_THRESHOLD:-0.05}"
 CTB_TREE_MAX_DEPTHS="${CTB_TREE_MAX_DEPTHS:-1 3}"
 CTB_TREE_MIN_SAMPLES_LEAF="${CTB_TREE_MIN_SAMPLES_LEAF:-5}"
-CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy loss_aware}"
+CTB_LEAF_RIDGES="${CTB_LEAF_RIDGES:-1.0}"
 CTB_CURVATURE_EPS="${CTB_CURVATURE_EPS:-1e-6}"
 
 run_repo_script scripts/run_sparse_recovery_benchmark.py \
@@ -180,7 +180,7 @@ run_repo_script scripts/run_sparse_recovery_benchmark.py \
   --ctb-support-frequency-threshold "$CTB_SUPPORT_FREQUENCY_THRESHOLD" \
   --ctb-tree-max-depths $CTB_TREE_MAX_DEPTHS \
   --ctb-tree-min-samples-leaf "$CTB_TREE_MIN_SAMPLES_LEAF" \
-  --ctb-target-modes $CTB_TARGET_MODES \
+  --ctb-leaf-ridges $CTB_LEAF_RIDGES \
   --ctb-curvature-eps $CTB_CURVATURE_EPS \
   --n-jobs "$N_JOBS" \
   --save-feature-tables \

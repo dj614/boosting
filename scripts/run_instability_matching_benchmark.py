@@ -51,10 +51,9 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctb-instability-penalty", type=float, default=0.0)
     parser.add_argument("--ctb-weight-power", type=float, default=1.0)
     parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
-    parser.add_argument("--ctb-target-modes", nargs="*", default=["loss_aware"])
     parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=[1e-6])
+    parser.add_argument("--ctb-leaf-ridges", nargs="*", type=float, default=[1.0])
     parser.add_argument("--ctb-min-samples-leaf", type=int, default=5)
-    parser.add_argument("--ctb-weak-learner-backend", choices=["sklearn_tree", "xgb_tree"], default="sklearn_tree")
     parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--save-pointwise", action="store_true", help="Save pointwise mean predictions for downstream geometry plots.")
     parser.add_argument("--outdir", type=Path, default=Path("outputs/experiment1_instability"))
@@ -83,8 +82,8 @@ def _resolve_methods(task_type: str, requested_methods: List[str] | None, spec_k
 def _expand_method_specs(
     methods: List[str],
     *,
-    ctb_target_modes: List[str],
     ctb_curvature_eps: List[float],
+    ctb_leaf_ridges: List[float],
     base_spec_kwargs: Dict[str, object],
 ) -> List[Dict[str, object]]:
     expanded: List[Dict[str, object]] = []
@@ -99,13 +98,13 @@ def _expand_method_specs(
                 }
             )
             continue
-        for target_mode in ctb_target_modes:
-            for curvature_eps in ctb_curvature_eps:
+        for curvature_eps in ctb_curvature_eps:
+            for leaf_ridge in ctb_leaf_ridges:
                 spec_kwargs = dict(base_spec_kwargs)
                 spec_kwargs.update(
                     {
-                        "ctb_target_mode": str(target_mode),
                         "ctb_curvature_eps": float(curvature_eps),
+                        "ctb_leaf_ridge": float(leaf_ridge),
                     }
                 )
                 expanded.append(
@@ -113,9 +112,8 @@ def _expand_method_specs(
                         "method": str(method),
                         "result_method": canonical_ctb_tree_result_method(
                             canonical_method,
-                            update_target_mode=str(target_mode),
                             transport_curvature_eps=float(curvature_eps),
-                            weak_learner_backend=str(spec_kwargs.get("ctb_weak_learner_backend", "xgb_tree")),
+                            leaf_ridge=float(leaf_ridge),
                         ),
                         "spec_kwargs": spec_kwargs,
                     }
@@ -296,10 +294,9 @@ def main() -> None:
         "ctb_instability_penalty": args.ctb_instability_penalty,
         "ctb_weight_power": args.ctb_weight_power,
         "ctb_weight_eps": args.ctb_weight_eps,
-        "ctb_target_modes": list(args.ctb_target_modes),
         "ctb_curvature_eps": [float(x) for x in args.ctb_curvature_eps],
+        "ctb_leaf_ridges": [float(x) for x in args.ctb_leaf_ridges],
         "ctb_min_samples_leaf": args.ctb_min_samples_leaf,
-        "ctb_weak_learner_backend": args.ctb_weak_learner_backend,
         "save_pointwise": bool(args.save_pointwise),
     }
     save_json(config, outdir / "run_config.json")
@@ -311,10 +308,9 @@ def main() -> None:
         "ctb_instability_penalty": float(args.ctb_instability_penalty),
         "ctb_weight_power": float(args.ctb_weight_power),
         "ctb_weight_eps": float(args.ctb_weight_eps),
-        "ctb_target_mode": str(args.ctb_target_modes[0]),
         "ctb_curvature_eps": float(args.ctb_curvature_eps[0]),
+        "ctb_leaf_ridge": float(args.ctb_leaf_ridges[0]),
         "ctb_min_samples_leaf": int(args.ctb_min_samples_leaf),
-        "ctb_weak_learner_backend": str(args.ctb_weak_learner_backend),
     }
 
     trial_rows: List[Dict[str, object]] = []
@@ -326,8 +322,8 @@ def main() -> None:
         methods = _resolve_methods(task_type, args.methods, spec_kwargs)
         method_specs = _expand_method_specs(
             methods,
-            ctb_target_modes=[str(x) for x in args.ctb_target_modes],
             ctb_curvature_eps=[float(x) for x in args.ctb_curvature_eps],
+            ctb_leaf_ridges=[float(x) for x in args.ctb_leaf_ridges],
             base_spec_kwargs=spec_kwargs,
         )
         for scenario in args.scenarios:

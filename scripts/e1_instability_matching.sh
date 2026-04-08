@@ -130,7 +130,7 @@ CTB_ETA="${CTB_ETA:-0.1}"
 CTB_INSTABILITY_PENALTY="${CTB_INSTABILITY_PENALTY:-0.2}"
 CTB_WEIGHT_POWER="${CTB_WEIGHT_POWER:-1.0}"
 CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
-CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy loss_aware}"
+CTB_LEAF_RIDGES="${CTB_LEAF_RIDGES:-1.0}"
 CTB_CURVATURE_EPS="${CTB_CURVATURE_EPS:-1e-6}"
 CTB_MIN_SAMPLES_LEAF="${CTB_MIN_SAMPLES_LEAF:-5}"
 
@@ -157,7 +157,7 @@ run_repo_script scripts/run_instability_matching_benchmark.py \
   --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY" \
   --ctb-weight-power "$CTB_WEIGHT_POWER" \
   --ctb-weight-eps "$CTB_WEIGHT_EPS" \
-  --ctb-target-modes $CTB_TARGET_MODES \
+  --ctb-leaf-ridges $CTB_LEAF_RIDGES \
   --ctb-curvature-eps $CTB_CURVATURE_EPS \
   --ctb-min-samples-leaf "$CTB_MIN_SAMPLES_LEAF" \
   --n-jobs "$N_JOBS" \

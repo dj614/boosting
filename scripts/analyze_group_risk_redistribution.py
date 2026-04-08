@@ -111,12 +111,6 @@ def _infer_focus_pairs(model_names: Sequence[str]) -> List[Tuple[str, str, str]]
         xgb = parsed.get(("xgb", depth))
         if rf and xgb:
             pairs.append((rf, xgb, f"xgb_vs_rf_depth{depth}"))
-        ctb_candidates = [name for (family, d), name in parsed.items() if family == "ctb" and d == depth]
-        if len(ctb_candidates) >= 2:
-            legacy = next((n for n in ctb_candidates if "mode-legacy" in n), None)
-            loss_aware = next((n for n in ctb_candidates if "mode-loss_aware" in n), None)
-            if legacy and loss_aware:
-                pairs.append((legacy, loss_aware, f"ctb_loss_aware_vs_legacy_depth{depth}"))
     return pairs
 
 

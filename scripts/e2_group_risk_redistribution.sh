@@ -142,7 +142,7 @@ CTB_ETA="${CTB_ETA:-0.1}"
 CTB_INSTABILITY_PENALTY="${CTB_INSTABILITY_PENALTY:-0.2}"
 CTB_WEIGHT_POWER="${CTB_WEIGHT_POWER:-1.0}"
 CTB_WEIGHT_EPS="${CTB_WEIGHT_EPS:-1e-8}"
-CTB_TARGET_MODES="${CTB_TARGET_MODES:-legacy loss_aware}"
+CTB_LEAF_RIDGES="${CTB_LEAF_RIDGES:-1.0}"
 CTB_CURVATURE_EPS="${CTB_CURVATURE_EPS:-1e-6}"
 
 run_args=(
@@ -168,7 +168,7 @@ run_args=(
   --ctb-instability-penalty "$CTB_INSTABILITY_PENALTY"
   --ctb-weight-power "$CTB_WEIGHT_POWER"
   --ctb-weight-eps "$CTB_WEIGHT_EPS"
-  --ctb-target-modes $CTB_TARGET_MODES
+  --ctb-leaf-ridges $CTB_LEAF_RIDGES
   --ctb-curvature-eps $CTB_CURVATURE_EPS
   --prediction-splits valid test
   --trajectory-splits valid test
@@ -199,7 +199,7 @@ run_repo_script scripts/analyze_group_risk_redistribution.py \
   --outdir "$OUTDIR/analysis" \
   --split test \
   --baseline-top-frac 0.10
-  
+
 maybe_log_to_wandb "$OUTDIR" "experiment2" "experiment2-group-risk" "experiment2,group-risk"
 
 echo "Experiment 2 finished. Outputs: $REPO_DIR/$OUTDIR"

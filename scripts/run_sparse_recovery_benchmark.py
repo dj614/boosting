@@ -276,7 +276,7 @@ def _run_model_trial(task: Dict[str, object]) -> Dict[str, object]:
             min_samples_leaf=int(task["ctb_tree_min_samples_leaf"]),
             transport_curvature_eps=float(task["ctb_curvature_eps"]),
             leaf_ridge=float(task["ctb_leaf_ridge"]),
-            instability_penalty=0.0,
+            instability_penalty=float(task["ctb_instability_lambda"]),
             weight_power=float(task["ctb_residual_weight_power"]),
             weight_eps=float(task["ctb_residual_weight_eps"]),
         )

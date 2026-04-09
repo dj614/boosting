@@ -66,8 +66,18 @@ def _progress_log(message: str) -> None:
     print(message, flush=True)
 
 
-def _format_primary_metric(*, task_type: str, row: Dict[str, object], use_report_metric_for_selection: bool = False) -> str:
-    metric_name = _valid_primary_metric_column(task_type, use_report_metric_for_selection=use_report_metric_for_selection)
+def _format_primary_metric(
+    *,
+    task_type: str,
+    row: Dict[str, object],
+    use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
+) -> str:
+    metric_name = _valid_primary_metric_column(
+        task_type,
+        use_report_metric_for_selection=use_report_metric_for_selection,
+        report_metric=report_metric,
+    )
     metric_value = row.get(metric_name)
     if metric_value is None:
         return f"{metric_name}=nan"
@@ -399,6 +409,8 @@ def run_open_tabular_benchmark(
     n_jobs: int = 1,
     progress_log_every: int = 0,
     use_report_metric_for_selection: bool = False,
+    classification_report_metric: str | None = None,
+    regression_report_metric: str | None = None,
     append_to_existing_output: bool = False,
     lightweight_output: bool = False,
 ) -> Dict[str, object]:
@@ -469,6 +481,8 @@ def run_open_tabular_benchmark(
             "output_root": str(output_root),
             "progress_log_every": int(progress_log_every),
             "use_report_metric_for_selection": bool(use_report_metric_for_selection),
+            "classification_report_metric": classification_report_metric,
+            "regression_report_metric": regression_report_metric,
             "lightweight_output": bool(lightweight_output),
         }
         for task_type, dataset_name, repeat_id in all_runs
@@ -536,6 +550,8 @@ def run_open_tabular_benchmark(
         "n_repeats": int(n_repeats),
         "base_seed": int(base_seed),
         "use_report_metric_for_selection": bool(use_report_metric_for_selection),
+        "classification_report_metric": classification_report_metric,
+        "regression_report_metric": regression_report_metric,
         "append_to_existing_output": bool(append_to_existing_output),
         "lightweight_output": bool(lightweight_output),
         "n_successful_runs": int(summary_test_df.shape[0]),
@@ -783,6 +799,11 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
     dataset_output_dir.mkdir(parents=True, exist_ok=True)
 
     progress_log_every = int(task.get("progress_log_every", 0))
+    report_metric = (
+        task.get("classification_report_metric")
+        if str(task_type).strip().lower() == "classification"
+        else task.get("regression_report_metric")
+    )
     if progress_log_every > 0:
         _progress_log(
             f"[run:start] {_task_label(task_type=task_type, dataset_name=dataset_name, repeat_id=int(repeat_id))} "
@@ -823,6 +844,7 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
                 show_progress=False,
                 progress_log_every=progress_log_every,
                 use_report_metric_for_selection=bool(task.get("use_report_metric_for_selection", False)),
+                report_metric=report_metric,
                 lightweight_output=bool(task.get("lightweight_output", False)),
             )
             summary_test_rows.append(result["test_summary_row"])
@@ -866,6 +888,7 @@ def _run_family_grid_search(
     show_progress: bool = True,
     progress_log_every: int = 0,
     use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
     lightweight_output: bool = False,
 ) -> Dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -892,6 +915,7 @@ def _run_family_grid_search(
                 config=config,
                 selection_checkpoints=selection_checkpoints,
                 use_report_metric_for_selection=use_report_metric_for_selection,
+                report_metric=report_metric,
             )
             wrapper.fit(dataset.train, dataset.valid)
             if wrapper.selected_valid_prediction_ is None:
@@ -918,10 +942,12 @@ def _run_family_grid_search(
                 task_type=task_type,
                 row=row,
                 use_report_metric_for_selection=use_report_metric_for_selection,
+                report_metric=report_metric,
             ) < _selection_key(
                 task_type=task_type,
                 row=best_row,
                 use_report_metric_for_selection=use_report_metric_for_selection,
+                report_metric=report_metric,
             ):
                 best_row = row
                 best_config = config
@@ -933,7 +959,7 @@ def _run_family_grid_search(
                     f"[family:progress] {_task_label(task_type=task_type, dataset_name=dataset_name, repeat_id=int(repeat_id))} "
                     f"family={str(family)} cfg={config_idx}/{len(configs)} current={config.model_name} "
                     f"best={best_config.model_name if best_config is not None else 'n/a'} "
-                    f"{_format_primary_metric(task_type=task_type, row=best_row if best_row is not None else row, use_report_metric_for_selection=use_report_metric_for_selection)}"
+                    f"{_format_primary_metric(task_type=task_type, row=best_row if best_row is not None else row, use_report_metric_for_selection=use_report_metric_for_selection, report_metric=report_metric)}"
                 )
 
     if best_row is None or best_config is None or best_wrapper is None:
@@ -946,6 +972,7 @@ def _run_family_grid_search(
     sort_metric = _valid_primary_metric_column(
         task_type,
         use_report_metric_for_selection=use_report_metric_for_selection,
+        report_metric=report_metric,
     )
     sorted_rows = pd.DataFrame(rows).sort_values(
         by=[sort_metric, "selected_checkpoint", "max_depth", "min_samples_leaf"],
@@ -953,6 +980,7 @@ def _run_family_grid_search(
             not _selection_metric_higher_is_better(
                 task_type,
                 use_report_metric_for_selection=use_report_metric_for_selection,
+                report_metric=report_metric,
             ),
             True,
             True,
@@ -975,6 +1003,7 @@ def _run_family_grid_search(
         "selection_metric": _valid_primary_metric_column(
             task_type,
             use_report_metric_for_selection=use_report_metric_for_selection,
+            report_metric=report_metric,
         ),
         "valid_metrics": {k.replace("valid_", ""): v for k, v in best_row.items() if str(k).startswith("valid_")},
         "test_metrics": {k.replace("test_", ""): v for k, v in best_row.items() if str(k).startswith("test_")},
@@ -1006,7 +1035,7 @@ def _run_family_grid_search(
         _progress_log(
             f"[family:done] {_task_label(task_type=task_type, dataset_name=dataset_name, repeat_id=int(repeat_id))} "
             f"family={str(family)} best={best_config.model_name} checkpoint={int(best_wrapper.selected_checkpoint_)} "
-            f"{_format_primary_metric(task_type=task_type, row=best_row, use_report_metric_for_selection=use_report_metric_for_selection)}"
+            f"{_format_primary_metric(task_type=task_type, row=best_row, use_report_metric_for_selection=use_report_metric_for_selection, report_metric=report_metric)}"
         )
     return {"valid_summary_row": valid_summary_row, "test_summary_row": test_summary_row}
 
@@ -1076,15 +1105,57 @@ def _resolved_selection_checkpoints(*, max_rounds: int, requested: Sequence[int]
     return sorted(checkpoints)
 
 
-def _valid_primary_metric_column(task_type: str, use_report_metric_for_selection: bool = False) -> str:
+def _resolve_primary_metric_suffix(
+    task_type: str,
+    *,
+    use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
+) -> str:
     normalized_task = str(task_type).strip().lower()
     if normalized_task == "classification":
-        return "valid_accuracy" if use_report_metric_for_selection else "valid_log_loss"
-    return "valid_mse" if use_report_metric_for_selection else "valid_rmse"
+        allowed = {
+            "accuracy",
+            "balanced_accuracy",
+            "log_loss",
+            "brier",
+            "calibration_error",
+            "roc_auc",
+        }
+        default_metric = "accuracy" if use_report_metric_for_selection else "log_loss"
+    elif normalized_task == "regression":
+        allowed = {"mse", "rmse", "mae", "r2"}
+        default_metric = "mse" if use_report_metric_for_selection else "rmse"
+    else:
+        raise ValueError(f"Unsupported task_type={task_type!r}")
+
+    metric = default_metric if report_metric is None else str(report_metric).strip().lower()
+    if metric not in allowed:
+        raise ValueError(
+            f"Unsupported primary metric {metric!r} for task_type={normalized_task!r}. "
+            f"Allowed: {sorted(allowed)}"
+        )
+    return metric
 
 
-def _selection_metric_higher_is_better(task_type: str, use_report_metric_for_selection: bool = False) -> bool:
-    return str(task_type).strip().lower() == "classification" and bool(use_report_metric_for_selection)
+def _valid_primary_metric_column(
+    task_type: str,
+    use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
+) -> str:
+    return f"valid_{_resolve_primary_metric_suffix(task_type, use_report_metric_for_selection=use_report_metric_for_selection, report_metric=report_metric)}"
+
+
+def _selection_metric_higher_is_better(
+    task_type: str,
+    use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
+) -> bool:
+    metric = _resolve_primary_metric_suffix(
+        task_type,
+        use_report_metric_for_selection=use_report_metric_for_selection,
+        report_metric=report_metric,
+    )
+    return metric in {"accuracy", "balanced_accuracy", "roc_auc", "r2"}
 
 
 def _selection_key(
@@ -1092,10 +1163,19 @@ def _selection_key(
     task_type: str,
     row: Dict[str, object],
     use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
 ) -> Tuple[float, int, int, int]:
-    metric_name = _valid_primary_metric_column(task_type, use_report_metric_for_selection=use_report_metric_for_selection)
+    metric_name = _valid_primary_metric_column(
+        task_type,
+        use_report_metric_for_selection=use_report_metric_for_selection,
+        report_metric=report_metric,
+    )
     metric_value = float(row[metric_name])
-    if _selection_metric_higher_is_better(task_type, use_report_metric_for_selection=use_report_metric_for_selection):
+    if _selection_metric_higher_is_better(
+        task_type,
+        use_report_metric_for_selection=use_report_metric_for_selection,
+        report_metric=report_metric,
+    ):
         metric_value = -metric_value
     return (
         metric_value,

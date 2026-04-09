@@ -13,10 +13,19 @@ from sklearn.ensemble import (
     RandomForestClassifier,
     RandomForestRegressor,
 )
-from sklearn.metrics import accuracy_score, log_loss, mean_squared_error
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    log_loss,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    roc_auc_score,
+)
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from .ctb_core import ConsensusTransportBoosting
+from .grouped_classification_eval import expected_calibration_error
 from .ctb_semantics import ctb_family_output_name, ctb_tree_model_name, is_ctb_tree_family_name, normalize_ctb_tree_family_name
 
 try:  # pragma: no cover
@@ -78,12 +87,14 @@ class TabularBenchmarkWrapper:
         config: TabularBenchmarkModelConfig,
         selection_checkpoints: Sequence[int],
         use_report_metric_for_selection: bool = False,
+        report_metric: str | None = None,
     ) -> None:
         self.config = config
         self.selection_checkpoints = sorted({int(x) for x in selection_checkpoints if int(x) > 0})
         if not self.selection_checkpoints:
             raise ValueError("selection_checkpoints must be non-empty")
         self.use_report_metric_for_selection = bool(use_report_metric_for_selection)
+        self.report_metric = report_metric
         self.model = None
         self.selected_checkpoint_: Optional[int] = None
         self.selection_trace_: Optional[pd.DataFrame] = None
@@ -155,20 +166,46 @@ class TabularBenchmarkWrapper:
 class BinaryTabularBenchmarkWrapper(TabularBenchmarkWrapper):
     @property
     def selection_metric_name(self) -> str:
-        if self.use_report_metric_for_selection:
-            return "valid_accuracy"
-        return "valid_log_loss"
+        metric = _resolve_primary_metric_suffix(
+            "classification",
+            use_report_metric_for_selection=self.use_report_metric_for_selection,
+            report_metric=self.report_metric,
+        )
+        return f"valid_{metric}"
 
     @property
     def selection_metric_higher_is_better(self) -> bool:
-        return bool(self.use_report_metric_for_selection)
+        return _primary_metric_higher_is_better(
+            "classification",
+            use_report_metric_for_selection=self.use_report_metric_for_selection,
+            report_metric=self.report_metric,
+        )
 
     def _selection_metric_value(self, y_true: Array, prediction: Array) -> float:
         y_true_arr = np.asarray(y_true, dtype=int)
         prob = np.clip(np.asarray(prediction, dtype=float), 1e-8, 1.0 - 1e-8)
-        if self.use_report_metric_for_selection:
-            return float(accuracy_score(y_true_arr, (prob >= 0.5).astype(int)))
-        return float(log_loss(y_true_arr, prob, labels=[0, 1]))
+        y_pred = (prob >= 0.5).astype(int)
+        metric = _resolve_primary_metric_suffix(
+            "classification",
+            use_report_metric_for_selection=self.use_report_metric_for_selection,
+            report_metric=self.report_metric,
+        )
+        if metric == "accuracy":
+            return float(accuracy_score(y_true_arr, y_pred))
+        if metric == "balanced_accuracy":
+            return float(balanced_accuracy_score(y_true_arr, y_pred))
+        if metric == "log_loss":
+            return float(log_loss(y_true_arr, prob, labels=[0, 1]))
+        if metric == "brier":
+            return float(np.mean((prob - y_true_arr) ** 2))
+        if metric == "calibration_error":
+            return float(expected_calibration_error(y_true_arr, prob))
+        if metric == "roc_auc":
+            try:
+                return float(roc_auc_score(y_true_arr, prob))
+            except ValueError:
+                return 0.5
+        raise ValueError(f"Unsupported classification metric: {metric}")
 
     def predict_proba(self, X: Array, checkpoint: Optional[int] = None) -> Array:
         if self.model is None:
@@ -188,17 +225,39 @@ class BinaryTabularBenchmarkWrapper(TabularBenchmarkWrapper):
 class RegressionTabularBenchmarkWrapper(TabularBenchmarkWrapper):
     @property
     def selection_metric_name(self) -> str:
-        if self.use_report_metric_for_selection:
-            return "valid_mse"
-        return "valid_rmse"
+        metric = _resolve_primary_metric_suffix(
+            "regression",
+            use_report_metric_for_selection=self.use_report_metric_for_selection,
+            report_metric=self.report_metric,
+        )
+        return f"valid_{metric}"
+
+    @property
+    def selection_metric_higher_is_better(self) -> bool:
+        return _primary_metric_higher_is_better(
+            "regression",
+            use_report_metric_for_selection=self.use_report_metric_for_selection,
+            report_metric=self.report_metric,
+        )
 
     def _selection_metric_value(self, y_true: Array, prediction: Array) -> float:
         y_true = np.asarray(y_true, dtype=float)
         prediction = np.asarray(prediction, dtype=float)
         mse = float(mean_squared_error(y_true, prediction))
-        if self.use_report_metric_for_selection:
+        metric = _resolve_primary_metric_suffix(
+            "regression",
+            use_report_metric_for_selection=self.use_report_metric_for_selection,
+            report_metric=self.report_metric,
+        )
+        if metric == "mse":
             return mse
-        return float(np.sqrt(mse))
+        if metric == "rmse":
+            return float(np.sqrt(mse))
+        if metric == "mae":
+            return float(mean_absolute_error(y_true, prediction))
+        if metric == "r2":
+            return float(r2_score(y_true, prediction))
+        raise ValueError(f"Unsupported regression metric: {metric}")
 
     def predict(self, X: Array, checkpoint: Optional[int] = None) -> Array:
         if self.model is None:
@@ -445,32 +504,79 @@ def build_tabular_benchmark_wrapper(
     config: TabularBenchmarkModelConfig,
     selection_checkpoints: Sequence[int],
     use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
 ) -> TabularBenchmarkWrapper:
     task_type = str(config.task_type).strip().lower()
     family = normalize_ctb_tree_family_name(config.family)
     if task_type == "classification":
         if family == "bagging":
-            return BaggingBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return BaggingBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
         if family == "rf":
-            return RandomForestBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return RandomForestBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
         if family == "gbdt":
-            return GradientBoostingBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return GradientBoostingBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
         if family == "xgb":
-            return XGBoostBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return XGBoostBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
         if family == "ctb":
-            return CTBBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return CTBBinaryTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
     elif task_type == "regression":
         if family == "bagging":
-            return BaggingRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return BaggingRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
         if family == "rf":
-            return RandomForestRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return RandomForestRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
         if family == "gbdt":
-            return GradientBoostingRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return GradientBoostingRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
         if family == "xgb":
-            return XGBoostRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return XGBoostRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
         if family == "ctb":
-            return CTBRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection)
+            return CTBRegressionTabularWrapper(config, selection_checkpoints, use_report_metric_for_selection, report_metric)
     raise ValueError(f"Unsupported task_type={task_type!r} family={family!r}")
+
+
+def _resolve_primary_metric_suffix(
+    task_type: str,
+    *,
+    use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
+) -> str:
+    task = str(task_type).strip().lower()
+    if task == "classification":
+        allowed = {
+            "accuracy",
+            "balanced_accuracy",
+            "log_loss",
+            "brier",
+            "calibration_error",
+            "roc_auc",
+        }
+        default_metric = "accuracy" if use_report_metric_for_selection else "log_loss"
+    elif task == "regression":
+        allowed = {"mse", "rmse", "mae", "r2"}
+        default_metric = "mse" if use_report_metric_for_selection else "rmse"
+    else:
+        raise ValueError(f"Unsupported task_type={task_type!r}")
+
+    metric = default_metric if report_metric is None else str(report_metric).strip().lower()
+    if metric not in allowed:
+        raise ValueError(
+            f"Unsupported primary metric {metric!r} for task_type={task!r}. "
+            f"Allowed: {sorted(allowed)}"
+        )
+    return metric
+
+
+def _primary_metric_higher_is_better(
+    task_type: str,
+    *,
+    use_report_metric_for_selection: bool = False,
+    report_metric: str | None = None,
+) -> bool:
+    metric = _resolve_primary_metric_suffix(
+        task_type,
+        use_report_metric_for_selection=use_report_metric_for_selection,
+        report_metric=report_metric,
+    )
+    return metric in {"accuracy", "balanced_accuracy", "roc_auc", "r2"}
 
 
 FAMILY_DEFAULTS = {

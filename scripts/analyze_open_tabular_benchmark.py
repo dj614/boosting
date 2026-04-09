@@ -74,6 +74,18 @@ def _make_parser() -> argparse.ArgumentParser:
         default=DEFAULT_FAMILY_ORDER,
         help="Preferred ordering for model families in tables/plots.",
     )
+    parser.add_argument(
+        "--classification-primary-metric",
+        type=str,
+        default=PRIMARY_METRIC["classification"],
+        help="Primary classification metric used for valid/test gap summaries.",
+    )
+    parser.add_argument(
+        "--regression-primary-metric",
+        type=str,
+        default=PRIMARY_METRIC["regression"],
+        help="Primary regression metric used for valid/test gap summaries.",
+    )
     return parser
 
 
@@ -343,9 +355,9 @@ def _best_family_summary(agg_df: pd.DataFrame, metric_cols: Sequence[str]) -> pd
     return pd.DataFrame(rows).sort_values(["task_type", "dataset_name", "metric"]).reset_index(drop=True)
 
 
-def _generalization_gap_summary(frame: pd.DataFrame) -> pd.DataFrame:
+def _generalization_gap_summary(frame: pd.DataFrame, primary_metric: Dict[str, str]) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
-    for task_type, metric_suffix in PRIMARY_METRIC.items():
+    for task_type, metric_suffix in primary_metric.items():
         valid_col = f"valid_{metric_suffix}"
         test_col = f"test_{metric_suffix}"
         if valid_col not in frame.columns or test_col not in frame.columns:
@@ -466,14 +478,18 @@ def main() -> None:
 
     filtered_df = summary_df.loc[summary_df["task_type"].astype(str).isin(task_types)].copy()
     family_order = _ordered_unique(filtered_df["family"].astype(str), args.family_order)
+    primary_metric = {
+        "classification": str(args.classification_primary_metric),
+        "regression": str(args.regression_primary_metric),
+    }
 
     requested_metric_cols: List[str] = []
     for task_type in task_types:
         requested_metric_cols.extend(_task_metrics(task_type, args, filtered_df.columns))
     primary_valid_test_cols = [
-        f"valid_{PRIMARY_METRIC[task_type]}" for task_type in task_types if f"valid_{PRIMARY_METRIC[task_type]}" in filtered_df.columns
+        f"valid_{primary_metric[task_type]}" for task_type in task_types if f"valid_{primary_metric[task_type]}" in filtered_df.columns
     ] + [
-        f"test_{PRIMARY_METRIC[task_type]}" for task_type in task_types if f"test_{PRIMARY_METRIC[task_type]}" in filtered_df.columns
+        f"test_{primary_metric[task_type]}" for task_type in task_types if f"test_{primary_metric[task_type]}" in filtered_df.columns
     ]
     metric_cols = sorted(set(requested_metric_cols + primary_valid_test_cols))
 
@@ -481,7 +497,7 @@ def main() -> None:
     rank_df = _family_rank_summary(agg_df, metric_cols=requested_metric_cols, family_order=family_order)
     ctb_df = _ctb_advantage_summary(agg_df, metric_cols=requested_metric_cols, family_order=family_order)
     best_df = _best_family_summary(agg_df, metric_cols=requested_metric_cols)
-    gap_df = _generalization_gap_summary(filtered_df)
+    gap_df = _generalization_gap_summary(filtered_df, primary_metric=primary_metric)
 
     _save_table(agg_df, outdir / "dataset_family_metric_summary.csv")
     _save_table(rank_df, outdir / "family_average_ranks.csv")
@@ -502,6 +518,7 @@ def main() -> None:
             task_type: _task_metrics(task_type, args, filtered_df.columns)
             for task_type in task_types
         },
+        "primary_metric_by_task": primary_metric,
     }
     if not ctb_df.empty:
         ctb_win_rows: List[Dict[str, object]] = []

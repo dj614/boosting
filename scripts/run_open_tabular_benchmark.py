@@ -66,7 +66,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-report-metric-for-selection",
         action="store_true",
-        help="Select checkpoints/configs by valid accuracy (classification) or valid mse (regression) instead of the default valid log loss / valid rmse.",
+        help="If set, select checkpoints/configs by valid_<primary report metric> instead of the legacy defaults "
+        "(valid_log_loss for classification, valid_rmse for regression).",
+    )
+    parser.add_argument(
+        "--classification-report-metric",
+        type=str,
+        default=None,
+        help="Primary classification metric to report/select from: accuracy, balanced_accuracy, log_loss, brier, calibration_error, roc_auc",
+    )
+    parser.add_argument(
+        "--regression-report-metric",
+        type=str,
+        default=None,
+        help="Primary regression metric to report/select from: mse, rmse, mae, r2",
     )
     parser.add_argument(
         "--append-output",
@@ -117,6 +130,8 @@ def main() -> None:
         n_jobs=args.n_jobs,
         progress_log_every=args.progress_log_every,
         use_report_metric_for_selection=args.use_report_metric_for_selection,
+        classification_report_metric=args.classification_report_metric,
+        regression_report_metric=args.regression_report_metric,
         append_to_existing_output=args.append_output,
         lightweight_output=args.lightweight_output,
     )

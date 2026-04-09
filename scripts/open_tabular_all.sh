@@ -110,8 +110,8 @@ run_task \
   --classification-datasets \
   --regression-datasets "${REGRESSION_DATASETS[@]}"
 
-# # experiments
-# bash scripts/e1_instability_matching.sh
-# bash scripts/e2_group_risk_redistribution.sh
-# bash scripts/e4_sparse_recovery.sh
-# bash scripts/e3_prediction_vs_inference.sh
+# experiments
+bash scripts/e1_instability_matching.sh
+bash scripts/e2_group_risk_redistribution.sh
+bash scripts/e4_sparse_recovery.sh
+bash scripts/e3_prediction_vs_inference.sh

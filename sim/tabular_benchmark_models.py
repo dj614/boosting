@@ -56,7 +56,7 @@ class TabularBenchmarkModelConfig:
     weight_eps: float = 1e-8
     ctb_curvature_eps: float = 1e-6
     ctb_leaf_ridge: float = 1.0
-    ctb_weak_learner: str = "xgboost"
+    ctb_weak_learner: str = "sklearn"
     random_state: int = 0
 
     @property
@@ -617,7 +617,7 @@ FAMILY_DEFAULTS = {
         "inner_bootstraps": (2,),
         "eta": (1.0,),
         "ctb_leaf_ridge": (1.0,),
-        "ctb_weak_learner": ("xgboost",),
+        "ctb_weak_learner": ("sklearn",),
     },
 }
 
@@ -657,7 +657,7 @@ def expand_tabular_model_grid(
     default_etas = (0.5, 1.0)
     default_ctb_curvature_eps = (1e-6,)
     default_ctb_leaf_ridges = (1.0,)
-    default_ctb_weak_learners = ("xgboost",)
+    default_ctb_weak_learners = ("sklearn",)
 
     def _resolve_grid_values(
         explicit_values: Sequence[object] | None,

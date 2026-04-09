@@ -42,7 +42,7 @@ class ConsensusTransportBoosting(BaseEstimator):
         min_samples_leaf: int = 5,
         leaf_ridge: float = 1.0,
         random_state: int | None = None,
-        weak_learner: WeakLearnerType = "xgboost",
+        weak_learner: WeakLearnerType = "sklearn",
     ):
         self.task_type = task_type
         self.n_estimators = int(n_estimators)

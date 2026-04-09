@@ -6,8 +6,14 @@ import numpy as np
 from sklearn.base import BaseEstimator
 from sklearn.tree import DecisionTreeRegressor
 
+try:  # pragma: no cover
+    from xgboost import XGBRegressor
+except Exception:  # pragma: no cover
+    XGBRegressor = None
+
 
 TaskType = Literal["regression", "classification"]
+WeakLearnerType = Literal["sklearn", "xgboost"]
 
 
 class ConsensusTransportBoosting(BaseEstimator):
@@ -36,6 +42,7 @@ class ConsensusTransportBoosting(BaseEstimator):
         min_samples_leaf: int = 5,
         leaf_ridge: float = 1.0,
         random_state: int | None = None,
+        weak_learner: WeakLearnerType = "xgboost",
     ):
         self.task_type = task_type
         self.n_estimators = int(n_estimators)
@@ -51,6 +58,7 @@ class ConsensusTransportBoosting(BaseEstimator):
         self.min_samples_leaf = int(min_samples_leaf)
         self.leaf_ridge = float(leaf_ridge)
         self.random_state = random_state
+        self.weak_learner = str(weak_learner).strip().lower()
 
     @staticmethod
     def _sigmoid(score: np.ndarray) -> np.ndarray:
@@ -80,12 +88,44 @@ class ConsensusTransportBoosting(BaseEstimator):
         return grad, hess, z, s
 
     def _make_structure_learner(self, random_state: int | None):
-        return DecisionTreeRegressor(
-            max_depth=self.max_depth,
-            max_leaf_nodes=self.max_leaf_nodes,
-            min_samples_leaf=self.min_samples_leaf,
-            random_state=random_state,
-        )
+        if self.weak_learner == "sklearn":
+            return DecisionTreeRegressor(
+                max_depth=self.max_depth,
+                max_leaf_nodes=self.max_leaf_nodes,
+                min_samples_leaf=self.min_samples_leaf,
+                random_state=random_state,
+            )
+        if self.weak_learner == "xgboost":
+            if XGBRegressor is None:  # pragma: no cover
+                raise ImportError("xgboost is not installed, but weak_learner='xgboost' was requested")
+            xgb_kwargs: dict[str, Any] = {
+                "n_estimators": 1,
+                "max_depth": 0 if self.max_depth is None else int(self.max_depth),
+                "learning_rate": 1.0,
+                "subsample": 1.0,
+                "colsample_bytree": 1.0,
+                "reg_lambda": 0.0,
+                "min_child_weight": float(self.min_samples_leaf),
+                "objective": "reg:squarederror",
+                "tree_method": "hist",
+                "random_state": random_state,
+                "n_jobs": 1,
+                "verbosity": 0,
+            }
+            if self.max_leaf_nodes is not None:
+                xgb_kwargs["max_leaves"] = int(self.max_leaf_nodes)
+                xgb_kwargs["grow_policy"] = "lossguide"
+            return XGBRegressor(**xgb_kwargs)
+        raise ValueError(f"Unsupported weak_learner={self.weak_learner!r}")
+
+    @staticmethod
+    def _apply_structure_learner(tree: Any, X: np.ndarray) -> np.ndarray:
+        applied = np.asarray(tree.apply(np.asarray(X, dtype=float)))
+        if applied.ndim == 2:
+            if applied.shape[1] != 1:
+                raise RuntimeError(f"Expected a single-tree leaf assignment, got shape={applied.shape}")
+            applied = applied[:, 0]
+        return np.asarray(applied, dtype=np.int64).reshape(-1)
 
     @staticmethod
     def _leaf_lookup(unique_leaf_ids: np.ndarray, applied_leaf_ids: np.ndarray) -> np.ndarray:
@@ -145,6 +185,8 @@ class ConsensusTransportBoosting(BaseEstimator):
             raise ValueError(f"Mismatched X/y with shapes {X.shape} and {y.shape}")
         if self.task_type not in {"regression", "classification"}:
             raise ValueError(f"Unsupported task_type={self.task_type!r}")
+        if self.weak_learner not in {"sklearn", "xgboost"}:
+            raise ValueError(f"Unsupported weak_learner={self.weak_learner!r}")
         if self.n_estimators <= 0:
             raise ValueError("n_estimators must be positive")
         if self.n_inner_bootstraps <= 0:
@@ -182,7 +224,7 @@ class ConsensusTransportBoosting(BaseEstimator):
             tree = self._make_structure_learner(random_state=int(rng.integers(0, 2**31 - 1)))
             tree.fit(X, z, sample_weight=s)
 
-            applied_leaf_ids = np.asarray(tree.apply(X), dtype=np.int64)
+            applied_leaf_ids = self._apply_structure_learner(tree, X)
             unique_leaf_ids, inverse = np.unique(applied_leaf_ids, return_inverse=True)
             n_leaves = int(unique_leaf_ids.size)
             if n_leaves <= 0:
@@ -232,7 +274,7 @@ class ConsensusTransportBoosting(BaseEstimator):
         tree = round_state["tree"]
         unique_leaf_ids = np.asarray(round_state["leaf_ids"], dtype=np.int64)
         leaf_values = np.asarray(round_state["leaf_values"], dtype=float)
-        applied_leaf_ids = np.asarray(tree.apply(np.asarray(X, dtype=float)), dtype=np.int64)
+        applied_leaf_ids = self._apply_structure_learner(tree, X)
         positions = self._leaf_lookup(unique_leaf_ids, applied_leaf_ids)
         return np.asarray(leaf_values[positions], dtype=float).reshape(-1)
 

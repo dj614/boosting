@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ctb-weight-eps", type=float, default=1e-8)
     parser.add_argument("--ctb-curvature-eps", nargs="*", type=float, default=None)
     parser.add_argument("--ctb-leaf-ridges", nargs="*", type=float, default=None)
+    parser.add_argument("--ctb-weak-learners", nargs="*", default=None, choices=["sklearn", "xgboost"])
     parser.add_argument("--n-repeats", type=int, default=5)
     parser.add_argument("--base-seed", type=int, default=0)
     parser.add_argument("--train-ratio", type=float, default=0.8)
@@ -115,6 +116,7 @@ def main() -> None:
         ctb_weight_eps=args.ctb_weight_eps,
         ctb_curvature_eps=args.ctb_curvature_eps,
         ctb_leaf_ridges=args.ctb_leaf_ridges,
+        ctb_weak_learners=args.ctb_weak_learners,
         n_repeats=args.n_repeats,
         base_seed=args.base_seed,
         train_ratio=args.train_ratio,

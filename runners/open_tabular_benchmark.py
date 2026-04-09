@@ -394,6 +394,7 @@ def run_open_tabular_benchmark(
     ctb_weight_eps: float = 1e-8,
     ctb_leaf_ridges: Sequence[float] | None = None,
     ctb_curvature_eps: Sequence[float] | None = None,
+    ctb_weak_learners: Sequence[str] | None = None,
     n_repeats: int = 5,
     base_seed: int = 0,
     train_ratio: float = 0.8,
@@ -472,6 +473,7 @@ def run_open_tabular_benchmark(
             "ctb_weight_eps": float(ctb_weight_eps),
             "ctb_leaf_ridges": None if ctb_leaf_ridges is None else [float(x) for x in ctb_leaf_ridges],
             "ctb_curvature_eps": None if ctb_curvature_eps is None else [float(x) for x in ctb_curvature_eps],
+            "ctb_weak_learners": None if ctb_weak_learners is None else [str(x).strip().lower() for x in ctb_weak_learners],
             "classification_raw_root": str(classification_raw_root),
             "classification_processed_root": str(classification_processed_root),
             "classification_split_root": str(classification_split_root),
@@ -829,6 +831,7 @@ def _run_open_tabular_single_run(task: Dict[str, object]) -> Dict[str, object]:
                 weight_eps=float(task["ctb_weight_eps"]),
                 ctb_curvature_eps=task["ctb_curvature_eps"],
                 ctb_leaf_ridges=task["ctb_leaf_ridges"],
+                ctb_weak_learners=task.get("ctb_weak_learners"),
                 random_state=run_seed,
             )
             result = _run_family_grid_search(

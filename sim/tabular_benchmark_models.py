@@ -56,18 +56,22 @@ class TabularBenchmarkModelConfig:
     weight_eps: float = 1e-8
     ctb_curvature_eps: float = 1e-6
     ctb_leaf_ridge: float = 1.0
+    ctb_weak_learner: str = "xgboost"
     random_state: int = 0
 
     @property
     def model_name(self) -> str:
         family = normalize_ctb_tree_family_name(self.family)
         if is_ctb_tree_family_name(family):
-            return ctb_tree_model_name(
-                depth=int(self.max_depth),
-                task_type=str(self.task_type),
-                transport_curvature_eps=float(self.ctb_curvature_eps),
-                leaf_ridge=float(self.ctb_leaf_ridge),
-                include_task_suffix=False,
+            return (
+                ctb_tree_model_name(
+                    depth=int(self.max_depth),
+                    task_type=str(self.task_type),
+                    transport_curvature_eps=float(self.ctb_curvature_eps),
+                    leaf_ridge=float(self.ctb_leaf_ridge),
+                    include_task_suffix=False,
+                )
+                + f"__wl-{str(self.ctb_weak_learner).strip().lower()}"
             )
         return f"{family}_depth{self.max_depth}"
 
@@ -374,6 +378,7 @@ class CTBBinaryTabularWrapper(BinaryTabularBenchmarkWrapper):
             min_samples_leaf=self.config.min_samples_leaf,
             leaf_ridge=self.config.ctb_leaf_ridge,
             random_state=self.config.random_state,
+            weak_learner=self.config.ctb_weak_learner,
         )
 
     def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
@@ -488,6 +493,7 @@ class CTBRegressionTabularWrapper(RegressionTabularBenchmarkWrapper):
             min_samples_leaf=self.config.min_samples_leaf,
             leaf_ridge=self.config.ctb_leaf_ridge,
             random_state=self.config.random_state,
+            weak_learner=self.config.ctb_weak_learner,
         )
 
     def _predict_at_checkpoints(self, X: Array, checkpoints: Sequence[int]) -> Dict[int, Array]:
@@ -611,6 +617,7 @@ FAMILY_DEFAULTS = {
         "inner_bootstraps": (2,),
         "eta": (1.0,),
         "ctb_leaf_ridge": (1.0,),
+        "ctb_weak_learner": ("xgboost",),
     },
 }
 
@@ -632,6 +639,7 @@ def expand_tabular_model_grid(
     weight_eps: float = 1e-8,
     ctb_curvature_eps: Sequence[float] | None = None,
     ctb_leaf_ridges: Sequence[float] | None = None,
+    ctb_weak_learners: Sequence[str] | None = None,
     random_state: int = 0,
 ) -> List[TabularBenchmarkModelConfig]:
     grid: List[TabularBenchmarkModelConfig] = []
@@ -649,6 +657,7 @@ def expand_tabular_model_grid(
     default_etas = (0.5, 1.0)
     default_ctb_curvature_eps = (1e-6,)
     default_ctb_leaf_ridges = (1.0,)
+    default_ctb_weak_learners = ("xgboost",)
 
     def _resolve_grid_values(
         explicit_values: Sequence[object] | None,
@@ -675,10 +684,12 @@ def expand_tabular_model_grid(
         family_etas = _resolve_grid_values(etas, default_overrides, "eta", default_etas)
         family_ctb_curvature_eps = _resolve_grid_values(ctb_curvature_eps, default_overrides, "ctb_curvature_eps", default_ctb_curvature_eps)
         family_ctb_leaf_ridges = _resolve_grid_values(ctb_leaf_ridges, default_overrides, "ctb_leaf_ridge", default_ctb_leaf_ridges)
+        family_ctb_weak_learners = _resolve_grid_values(ctb_weak_learners, default_overrides, "ctb_weak_learner", default_ctb_weak_learners)
         if family != "ctb":
             family_max_leaf_nodes = (family_max_leaf_nodes[0],)
             family_ctb_curvature_eps = (float(family_ctb_curvature_eps[0]),)
             family_ctb_leaf_ridges = (float(family_ctb_leaf_ridges[0]),)
+            family_ctb_weak_learners = (str(family_ctb_weak_learners[0]).strip().lower(),)
 
         if family in {"bagging", "rf"}:
             for depth in family_max_depths:
@@ -741,27 +752,29 @@ def expand_tabular_model_grid(
                             for max_leaf_node in family_max_leaf_nodes:
                                 for curvature_eps in family_ctb_curvature_eps:
                                     for leaf_ridge in family_ctb_leaf_ridges:
-                                        grid.append(
-                                            TabularBenchmarkModelConfig(
-                                                task_type=task_type,
-                                                family=family,
-                                                max_depth=int(depth),
-                                                n_estimators=int(n_estimators),
-                                                max_leaf_nodes=None if max_leaf_node is None else int(max_leaf_node),
-                                                min_samples_leaf=int(leaf),
-                                                learning_rate=float(family_learning_rates[0]),
-                                                subsample=float(family_subsamples[0]),
-                                                colsample_bytree=float(family_colsample[0]),
-                                                inner_bootstraps=int(inner_bootstrap),
-                                                eta=float(eta),
-                                                instability_penalty=float(instability_penalty),
-                                                weight_power=float(weight_power),
-                                                weight_eps=float(weight_eps),
-                                                ctb_curvature_eps=float(curvature_eps),
-                                                ctb_leaf_ridge=float(leaf_ridge),
-                                                random_state=int(random_state),
+                                        for weak_learner in family_ctb_weak_learners:
+                                            grid.append(
+                                                TabularBenchmarkModelConfig(
+                                                    task_type=task_type,
+                                                    family=family,
+                                                    max_depth=int(depth),
+                                                    n_estimators=int(n_estimators),
+                                                    max_leaf_nodes=None if max_leaf_node is None else int(max_leaf_node),
+                                                    min_samples_leaf=int(leaf),
+                                                    learning_rate=float(family_learning_rates[0]),
+                                                    subsample=float(family_subsamples[0]),
+                                                    colsample_bytree=float(family_colsample[0]),
+                                                    inner_bootstraps=int(inner_bootstrap),
+                                                    eta=float(eta),
+                                                    instability_penalty=float(instability_penalty),
+                                                    weight_power=float(weight_power),
+                                                    weight_eps=float(weight_eps),
+                                                    ctb_curvature_eps=float(curvature_eps),
+                                                    ctb_leaf_ridge=float(leaf_ridge),
+                                                    ctb_weak_learner=str(weak_learner).strip().lower(),
+                                                    random_state=int(random_state),
+                                                )
                                             )
-                                        )
             continue
 
     return grid

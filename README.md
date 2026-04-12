@@ -1,6 +1,6 @@
-# boosting-main
+# CTB
 
-An experimental repository for studying **bagging / boosting / XGBoost / CTB**, covering simulation studies, open tabular benchmarks, and comparisons between prediction and statistical inference.
+This is an experimental repository for studying **bagging / boosting / XGBoost / CTB**, covering simulation studies, open tabular benchmarks, and comparisons between prediction and statistical inference.
 
 ## Environment
 
